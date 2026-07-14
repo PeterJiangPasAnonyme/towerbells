@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TowerBells Explorer</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <header class="sidebar-header">
+        <h1>TowerBells</h1>
+        <p class="subtitle">Explore carillons worldwide</p>
+      </header>
+
+      <div class="search-box">
+        <input type="search" id="searchInput" placeholder="Search name, city, carillonist…" />
+      </div>
+
+      <div class="filters" id="filters">
+        <details open>
+          <summary>Location</summary>
+          <label>Continent<select id="continent"><option value="">Any</option></select></label>
+          <label>Country<select id="country"><option value="">Any</option></select></label>
+          <label id="stateField" class="filter-hidden">State / Province<select id="state" disabled><option value="">Any</option></select></label>
+        </details>
+
+        <details open>
+          <summary>Year installed</summary>
+          <div class="range-row">
+            <input type="number" id="yearMin" />
+            <span>–</span>
+            <input type="number" id="yearMax" />
+          </div>
+          <div class="dual-range">
+            <div class="dual-range-track">
+              <div class="dual-range-fill" id="yearRangeFill"></div>
+            </div>
+            <input type="range" id="yearSliderMin" class="dual-range-thumb" />
+            <input type="range" id="yearSliderMax" class="dual-range-thumb" />
+          </div>
+        </details>
+
+        <details open>
+          <summary>Instrument</summary>
+          <label>Type<select id="instrumentType"><option value="">Any</option></select></label>
+          <label>Bourdon pitch<select id="bourdonPitch"><option value="">Any</option></select></label>
+          <label>Transposition (semitones)<select id="transposition"><option value="">Any</option></select></label>
+          <label>Range classification<select id="rangeClass"><option value="">Any</option></select></label>
+          <label>Bellfounder<select id="bellfounder"><option value="">Any</option></select></label>
+        </details>
+
+        <details open>
+          <summary>Institution</summary>
+          <label>Denomination<select id="denomination"><option value="">Any</option></select></label>
+          <label>Institution type<select id="institutionType"><option value="">Any</option></select></label>
+        </details>
+      </div>
+
+      <div class="results-meta" id="resultsMeta">Loading…</div>
+      <ul class="results-list" id="resultsList"></ul>
+    </aside>
+
+    <main class="map-panel">
+      <div id="map"></div>
+    </main>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Carillon — TowerBells</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body class="detail-page">
+  <header class="detail-header">
+    <a href="/" class="back-link">← Back to map</a>
+    <h1 id="title">Loading…</h1>
+    <p id="subtitle"></p>
+  </header>
+  <div class="detail-grid">
+    <section class="detail-main" id="detailContent"></section>
+    <aside class="detail-aside">
+      <div id="miniMap" class="mini-map"></div>
+      <div id="listAppearances"></div>
+    </aside>
+  </div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/static/detail.js"></script>
+</body>
+</html>
