@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 INSTRUMENT_TYPE_CANONICAL: dict[str, str] = {
-    "traditional carillon": "Traditional carillon",
-    "concert class carillon": "Concert class carillon",
-    "non-traditional carillon": "Non-traditional carillon",
-    "hybrid carillon": "Hybrid carillon",
-    "travelling carillon": "Travelling carillon",
+    "traditional carillon": "Traditional Carillon",
+    "concert class carillon": "Concert Class Carillon",
+    "non-traditional carillon": "Non-Traditional Carillon",
+    "hybrid carillon": "Hybrid Carillon",
+    "travelling carillon": "Travelling Carillon",
     "chime": "Chime",
     "ring": "Ring",
     "peal": "Peal",
-    "bell tower": "Bell tower",
+    "bell tower": "Bell Tower",
 }
 
 

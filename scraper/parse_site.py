@@ -3,6 +3,7 @@ import re
 from dataclasses import asdict, dataclass, field
 
 from scraper.instrument_types import normalize_instrument_type
+from scraper.text import clean_html_fragment
 
 SECTION_RE = re.compile(
     r"<b>\*([^:<]+):</b>\s*(?:<pre>)?(.*?)(?=</pre>|<p>\s*<b>\*|<b>\*|\Z)",
@@ -13,12 +14,7 @@ FIRST_PRE_RE = re.compile(r"<pre>\s*(.+?)\s*</pre>", re.I | re.S)
 
 
 def _clean_html(text: str) -> str:
-    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
-    text = re.sub(r"<[^>]+>", " ", text)
-    text = text.replace("&nbsp;", " ")
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n\s*\n+", "\n", text)
-    return text.strip()
+    return clean_html_fragment(text)
 
 
 def _first_line(text: str) -> str:

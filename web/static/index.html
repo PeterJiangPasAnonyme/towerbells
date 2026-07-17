@@ -10,16 +10,20 @@
 <body>
   <div class="app">
     <aside class="sidebar">
-      <header class="sidebar-header">
-        <h1>TowerBells</h1>
-        <p class="subtitle">Explore carillons worldwide</p>
-      </header>
+      <div class="sidebar-top" id="sidebarTop">
+        <header class="sidebar-header">
+          <div class="sidebar-header-row">
+            <h1>TowerBells</h1>
+            <a href="/admin" class="admin-nav-link" title="Edit database records">Edit data</a>
+          </div>
+          <p class="subtitle">Explore carillons worldwide</p>
+        </header>
 
-      <div class="search-box">
-        <input type="search" id="searchInput" placeholder="Search name, city, carillonist…" />
-      </div>
+        <div class="search-box">
+          <input type="search" id="searchInput" placeholder="Search name, city, carillonist…" />
+        </div>
 
-      <div class="filters" id="filters">
+        <div class="filters" id="filters">
         <details open>
           <summary>Location</summary>
           <label>Continent<select id="continent"><option value="">Any</option></select></label>
@@ -28,7 +32,10 @@
         </details>
 
         <details open>
-          <summary>Year installed</summary>
+          <summary>Year</summary>
+          <fieldset class="event-type-list" id="yearEventTypes">
+            <legend class="sr-only">Event types</legend>
+          </fieldset>
           <div class="range-row">
             <input type="number" id="yearMin" />
             <span>–</span>
@@ -37,36 +44,81 @@
           <div class="dual-range">
             <div class="dual-range-track">
               <div class="dual-range-fill" id="yearRangeFill"></div>
+              <div class="dual-range-break" id="yearRangeBreak" aria-hidden="true"></div>
             </div>
             <input type="range" id="yearSliderMin" class="dual-range-thumb" />
             <input type="range" id="yearSliderMax" class="dual-range-thumb" />
+          </div>
+          <div class="year-scale-labels" aria-hidden="true">
+            <span id="yearScaleMinLabel"></span>
+            <span class="year-scale-break-label">1900</span>
+            <span id="yearScaleMaxLabel"></span>
           </div>
         </details>
 
         <details open>
           <summary>Instrument</summary>
           <label>Type<select id="instrumentType"><option value="">Any</option></select></label>
-          <label>Bourdon pitch<select id="bourdonPitch"><option value="">Any</option></select></label>
-          <label>Transposition (semitones)<select id="transposition"><option value="">Any</option></select></label>
-          <label>Range classification<select id="rangeClass"><option value="">Any</option></select></label>
+          <label>Bourdon Pitch<select id="bourdonPitch"><option value="">Any</option></select></label>
+          <label>Transposition (Semitones)<select id="transposition"><option value="">Any</option></select></label>
+          <label class="label-with-info">
+            <span class="label-row">
+              Range Classification
+              <button
+                type="button"
+                class="info-btn"
+                id="rangeClassInfo"
+                aria-label="What do range classifications mean?"
+                title="What do range classifications mean?"
+              >i</button>
+            </span>
+            <select id="rangeClass"><option value="">Any</option></select>
+          </label>
           <label>Bellfounder<select id="bellfounder"><option value="">Any</option></select></label>
         </details>
 
         <details open>
           <summary>Institution</summary>
-          <label>Denomination<select id="denomination"><option value="">Any</option></select></label>
-          <label>Institution type<select id="institutionType"><option value="">Any</option></select></label>
+          <label>Institution Type<select id="institutionType"><option value="">Any</option></select></label>
+          <label id="denominationField" class="filter-hidden">Denomination<select id="denomination"><option value="">Any</option></select></label>
         </details>
+        </div>
       </div>
 
-      <div class="results-meta" id="resultsMeta">Loading…</div>
-      <ul class="results-list" id="resultsList"></ul>
+      <div
+        class="resize-handle resize-handle-h"
+        id="filtersResize"
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="Resize filters and results"
+      ></div>
+
+      <div class="sidebar-bottom" id="sidebarBottom">
+        <div class="results-meta" id="resultsMeta">Loading…</div>
+        <ul class="results-list" id="resultsList"></ul>
+      </div>
     </aside>
+
+    <div
+      class="resize-handle resize-handle-v"
+      id="sidebarResize"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize sidebar"
+    ></div>
 
     <main class="map-panel">
       <div id="map"></div>
     </main>
   </div>
+
+  <dialog id="rangeClassDialog" class="info-dialog">
+    <div class="info-dialog-header">
+      <h2 id="rangeClassDialogTitle">Keyboard range classifications</h2>
+      <button type="button" class="info-dialog-close" id="rangeClassDialogClose" aria-label="Close">×</button>
+    </div>
+    <div class="info-dialog-body" id="rangeClassDialogBody"></div>
+  </dialog>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="/static/app.js"></script>

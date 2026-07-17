@@ -14,6 +14,12 @@ sys.path.insert(0, str(ROOT))
 from scraper.config import BASE_URL, DB_PATH
 from scraper.fetch import fetch
 from scraper.instrument_types import normalize_instrument_type
+from scraper.institution_types import normalize_institution_type
+from scraper.denominations import normalize_denomination
+from scraper.bellfounders import normalize_founder_text, join_founder_parts, canonical_founder_name
+from scraper.fdy_parse import load_founders_by_page_from_html_pages
+from scraper.display_titles import display_title_for_site
+from scraper.list_page_parse import parse_grouped_list_page
 
 CONTINENT_BY_COUNTRY: dict[str, str] = {
     "USA": "North America",
@@ -90,7 +96,12 @@ FOUNDERS = [
     "Verdin",
     "Olmsted",
     "Bollée",
+    "VanBergen",
     "vanBergen",
+    "Van Aerschodt",
+    "vanAerschodt",
+    "Vanden Gheyn",
+    "vandenGheyn",
     "Stuckstede",
     "Muer",
     "Holbrook",
@@ -116,6 +127,7 @@ CREATE TABLE IF NOT EXISTS site_index (
     denomination TEXT,
     institution_type TEXT,
     bellfounder TEXT,
+    carillon_events TEXT,
     instrument_type TEXT,
     bell_count INTEGER,
     latitude REAL,
@@ -133,18 +145,7 @@ GROUPED_LIST_TYPES = {
 }
 
 
-def parse_bourdon_pitch(heaviest_pitch: str) -> str:
-    if not heaviest_pitch:
-        return ""
-    m = re.search(
-        r"\b(A#|B|C#|D#|F#|G#|C|D|E|F|G|A)\b",
-        heaviest_pitch,
-        re.I,
-    )
-    return m.group(1).upper() if m else ""
-
-
-def parse_transposition_semitones(transposition: str) -> int | None:
+from scraper.bourdon_pitch import parse_bourdon_pitch(transposition: str) -> int | None:
     if not transposition:
         return None
     m = re.search(r"(up|down)\s+(\d+)\s+semitone", transposition, re.I)
@@ -174,80 +175,42 @@ def extract_installation_year(
     return None
 
 
+def load_fdy_founders_by_page(conn: sqlite3.Connection) -> dict[str, list[str]]:
+    rows = conn.execute(
+        "SELECT filename FROM list_pages WHERE list_type = 'fdy' ORDER BY filename"
+    ).fetchall()
+    pages: dict[str, str] = {}
+    for (filename,) in rows:
+        try:
+            pages[filename] = fetch(filename)
+        except RuntimeError as exc:
+            print(f"SKIP fdy {filename}: {exc}")
+    return load_founders_by_page_from_html_pages(pages)
+
+
+def lookup_fdy_founder(page_filename: str | None, founders_by_page: dict[str, list[str]]) -> str:
+    if not page_filename:
+        return ""
+    page_stem = page_filename.rsplit(".", 1)[0].upper()
+    founders = founders_by_page.get(page_stem, [])
+    return join_founder_parts(founders)
+
+
 def extract_bellfounder(prior_history: str, technical_data: str, retuned_by: str) -> str:
+    prior_history = normalize_founder_text(prior_history)
+    technical_data = normalize_founder_text(technical_data)
+    retuned_by = normalize_founder_text(retuned_by)
     text = " ".join(filter(None, [prior_history, technical_data, retuned_by]))
     found: list[str] = []
     for founder in FOUNDERS:
         if founder.lower() in text.lower() and founder not in found:
             found.append(founder)
-    # Prefer original maker from prior_history first sentence
     m = re.search(r"made by\s+(.+?)(?:\n|$)", prior_history or "", re.I)
     if m:
-        primary = m.group(1).strip()
+        primary = canonical_founder_name(m.group(1))
         if primary and primary not in found:
             found.insert(0, primary)
-    return "; ".join(found[:3])
-
-
-def parse_grouped_list_page(html: str) -> dict[str, str]:
-    """Map site_id -> current section label from denom/instype/kr list pages."""
-    mapping: dict[str, str] = {}
-    current_group = "Unknown"
-
-    parts = re.split(r"<A\s+NAME=([^>\s]+)[^>]*>", html, flags=re.I)
-    for i in range(1, len(parts), 2):
-        anchor = parts[i].strip()
-        content = parts[i + 1] if i + 1 < len(parts) else ""
-
-        site_match = re.search(r"HREF=([A-Z0-9_]+\.HTM)", content, re.I)
-        if site_match:
-            site_id = site_match.group(1).rsplit(".", 1)[0].upper()
-            mapping[site_id] = current_group
-            continue
-
-        # Skip in-page site anchor names (same tag carries HREF on kr/denom pages)
-        if re.match(r"^[A-Z]{2}[A-Z0-9]{4,8}$", anchor, re.I):
-            continue
-
-        header = re.sub(r"<[^>]+>", " ", content)
-        header = re.sub(r"\s+", " ", header).strip()
-        if not header or len(header) > 120:
-            continue
-        if re.search(r"\d+\s+instruments", header, re.I):
-            continue
-        if header.lower().startswith("group "):
-            current_group = header.split("-")[0].strip()
-        elif header and not header.lower().startswith("location"):
-            current_group = header
-
-    # Fallback: line-by-line scan for pages where section headers aren't split cleanly
-    if not mapping:
-        for line in html.splitlines():
-            header_match = re.search(
-                r"<A NAME=[^>]+></A>\s*(?:<B>)?\s*(Group \d+[a-z]?\+?[^<]*)",
-                line,
-                re.I,
-            )
-            if header_match:
-                current_group = header_match.group(1).split("-")[0].strip()
-                continue
-            denom_header = re.search(
-                r"<A NAME=[A-Z0-9]+></A>\s*<B>([^<]+)</B>",
-                line,
-                re.I,
-            )
-            if denom_header:
-                current_group = denom_header.group(1).strip()
-                continue
-            site_match = re.search(
-                r"<A NAME=(\w+) HREF=(\w+\.HTM)",
-                line,
-                re.I,
-            )
-            if site_match:
-                mapping[site_match.group(1).upper()] = current_group
-
-    return mapping
+    return join_founder_parts(found[:3])
 
 
 def load_grouped_metadata(conn: sqlite3.Connection) -> dict[str, dict[str, str]]:
@@ -267,7 +230,7 @@ def load_grouped_metadata(conn: sqlite3.Connection) -> dict[str, dict[str, str]]
         except RuntimeError as exc:
             print(f"SKIP {filename}: {exc}")
             continue
-        grouped = parse_grouped_list_page(html)
+        grouped = parse_grouped_list_page(html, list_type=list_type)
         for site_id, label in grouped.items():
             combined.setdefault(site_id, {})[field] = label
         print(f"{filename}: {len(grouped)} sites tagged ({field})")
@@ -275,11 +238,16 @@ def load_grouped_metadata(conn: sqlite3.Connection) -> dict[str, dict[str, str]]
     return combined
 
 
-def build_search_text(row: sqlite3.Row, extra: dict[str, str]) -> str:
+def build_search_text(
+    row: sqlite3.Row,
+    extra: dict[str, str],
+    *,
+    title: str | None = None,
+) -> str:
     parts = [
         row["site_id"],
         row["short_name"],
-        row["full_title"],
+        title or row["full_title"],
         row["location_text"],
         row["carillonist"],
         row["remarks"],
@@ -297,6 +265,7 @@ def main() -> None:
     conn.execute("DELETE FROM site_index")
 
     grouped = load_grouped_metadata(conn)
+    founders_by_page = load_fdy_founders_by_page(conn)
 
     yr_by_site = {
         r["site_id"]: r["line_suffix"]
@@ -319,13 +288,14 @@ def main() -> None:
         year = extract_installation_year(site["prior_history"], yr_by_site.get(site_id))
         bourdon = parse_bourdon_pitch(site["heaviest_pitch"] or "")
         transposition = parse_transposition_semitones(site["transposition"] or "")
-        founder = extract_bellfounder(
-            site["prior_history"] or "",
-            site["technical_data"] or "",
-            site["retuned_by"] or "",
-        )
+        founder = lookup_fdy_founder(site["page_filename"], founders_by_page) or None
         continent = CONTINENT_BY_COUNTRY.get(site["country_code"] or "", "Other")
-        search_text = build_search_text(site, {**extra, "bellfounder": founder})
+        display_title = display_title_for_site(dict(site))
+        search_text = build_search_text(
+            site,
+            {**extra, "bellfounder": founder},
+            title=display_title,
+        )
 
         rows.append(
             (
@@ -337,15 +307,15 @@ def main() -> None:
                 bourdon,
                 transposition,
                 extra.get("range_classification"),
-                extra.get("denomination"),
-                extra.get("institution_type"),
+                normalize_denomination(extra.get("denomination"), site["country_code"]),
+                normalize_institution_type(extra.get("institution_type")),
                 founder or None,
                 normalize_instrument_type(site["instrument_type"]) or None,
                 site["bell_count"],
                 site["latitude"],
                 site["longitude"],
                 site["short_name"],
-                site["full_title"],
+                display_title,
                 search_text,
             )
         )

@@ -7,8 +7,20 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from scraper.carillon_events import (
+    EVENT_TYPE_OPTIONS,
+    events_from_json,
+    normalize_year_event_types,
+)
+from scraper.display_titles import build_site_display, display_title_for_site, format_site_subtitle
+from scraper.bourdon_pitch import sort_bourdon_pitch_facets
 from scraper.instrument_types import normalize_instrument_type
+from scraper.bellfounders import MIN_FOUNDER_FACET_COUNT, split_founder_parts
 from server.geo_labels import format_country, format_region
+from server.range_classifications import (
+    RANGE_CLASSIFICATION_LEGEND,
+    sort_range_classification_facets,
+)
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "towerbells.db"
 
@@ -16,11 +28,114 @@ DB_PATH = Path(__file__).resolve().parent.parent / "data" / "towerbells.db"
 def connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    _ensure_schema(conn)
     return conn
+
+
+def _ensure_schema(conn: sqlite3.Connection) -> None:
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(sites)")}
+    if "location_display_override" not in columns:
+        conn.execute("ALTER TABLE sites ADD COLUMN location_display_override TEXT")
+    if "display_title_override" not in columns:
+        conn.execute("ALTER TABLE sites ADD COLUMN display_title_override TEXT")
+    if "schedule_display_override" not in columns:
+        conn.execute("ALTER TABLE sites ADD COLUMN schedule_display_override TEXT")
+    if "contact_display_override" not in columns:
+        conn.execute("ALTER TABLE sites ADD COLUMN contact_display_override TEXT")
+    if "carillonist_display_override" not in columns:
+        conn.execute("ALTER TABLE sites ADD COLUMN carillonist_display_override TEXT")
+    if "past_carillonist_display_override" not in columns:
+        conn.execute("ALTER TABLE sites ADD COLUMN past_carillonist_display_override TEXT")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS geocode_cache (
+            cache_key TEXT PRIMARY KEY,
+            city TEXT,
+            region TEXT,
+            country_code TEXT,
+            country_name TEXT,
+            payload TEXT,
+            fetched_at REAL
+        )
+        """
+    )
+    conn.commit()
 
 
 def row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     return {k: row[k] for k in row.keys()}
+
+
+def _col(table_alias: str, column: str) -> str:
+    return f"{table_alias}.{column}" if table_alias else column
+
+
+def _bellfounder_part_clause(bellfounder: str, *, table_alias: str = "site_index") -> tuple[str, list[Any]]:
+    """Match one semicolon-separated founder part exactly (same rule as facet counts)."""
+    founder = bellfounder.strip()
+    col = _col(table_alias, "bellfounder")
+    clause = f"({col} = ? OR {col} LIKE ? OR {col} LIKE ? OR {col} LIKE ?)"
+    params = [
+        founder,
+        f"{founder}; %",
+        f"%; {founder}",
+        f"%; {founder}; %",
+    ]
+    return clause, params
+
+
+def _year_event_filter_clause(
+    *,
+    year_min: int | None,
+    year_max: int | None,
+    year_event_types: list[str] | None,
+    table_alias: str = "site_index",
+) -> tuple[str, list[Any]]:
+    if year_min is None and year_max is None:
+        return "", []
+
+    event_types = normalize_year_event_types(year_event_types)
+    type_placeholders = ", ".join("?" for _ in event_types)
+    params: list[Any] = [*event_types]
+    events_col = _col(table_alias, "carillon_events")
+
+    event_conditions = [f"json_extract(evt.value, '$.type') IN ({type_placeholders})"]
+    if year_min is not None:
+        event_conditions.append("CAST(json_extract(evt.value, '$.year') AS INTEGER) >= ?")
+        params.append(year_min)
+    if year_max is not None:
+        event_conditions.append("CAST(json_extract(evt.value, '$.year') AS INTEGER) <= ?")
+        params.append(year_max)
+
+    event_where = " AND ".join(event_conditions)
+    clauses = [
+        f"""
+        EXISTS (
+            SELECT 1
+            FROM json_each(COALESCE({events_col}, '[]')) AS evt
+            WHERE {event_where}
+        )
+        """
+    ]
+
+    if "installed" in event_types:
+        fallback_parts = [f"{_col(table_alias, 'installation_year')} IS NOT NULL"]
+        fallback_params: list[Any] = []
+        if year_min is not None:
+            fallback_parts.append(f"{_col(table_alias, 'installation_year')} >= ?")
+            fallback_params.append(year_min)
+        if year_max is not None:
+            fallback_parts.append(f"{_col(table_alias, 'installation_year')} <= ?")
+            fallback_params.append(year_max)
+        fallback_parts.append(
+            f"({_col(table_alias, 'carillon_events')} IS NULL OR "
+            f"{_col(table_alias, 'carillon_events')} = '' OR "
+            f"{_col(table_alias, 'carillon_events')} = '[]')"
+        )
+        clauses.append(f"({' AND '.join(fallback_parts)})")
+        params.extend(fallback_params)
+
+    return f"({' OR '.join(clauses)})", params
 
 
 def build_search_clauses(
@@ -31,6 +146,7 @@ def build_search_clauses(
     state: str | None = None,
     year_min: int | None = None,
     year_max: int | None = None,
+    year_event_types: list[str] | None = None,
     bellfounder: str | None = None,
     bourdon_pitch: str | None = None,
     transposition: int | None = None,
@@ -40,52 +156,60 @@ def build_search_clauses(
     instrument_type: str | None = None,
     map_only: bool = False,
     exclude: set[str] | None = None,
+    table_alias: str = "site_index",
 ) -> tuple[list[str], list[Any]]:
     exclude = exclude or set()
     clauses = ["1=1"]
     params: list[Any] = []
 
+    def col(name: str) -> str:
+        return f"{table_alias}.{name}"
+
     if q.strip() and "q" not in exclude:
-        clauses.append("search_text LIKE ?")
+        clauses.append(f"{col('search_text')} LIKE ?")
         params.append(f"%{q.strip()}%")
     if continent and "continent" not in exclude:
-        clauses.append("continent = ?")
+        clauses.append(f"{col('continent')} = ?")
         params.append(continent)
     if country and "country" not in exclude:
-        clauses.append("country_code = ?")
+        clauses.append(f"{col('country_code')} = ?")
         params.append(country)
     if state and "state" not in exclude:
-        clauses.append("state_province = ?")
+        clauses.append(f"{col('state_province')} = ?")
         params.append(state)
-    if year_min is not None and "year_min" not in exclude:
-        clauses.append("installation_year >= ?")
-        params.append(year_min)
-    if year_max is not None and "year_max" not in exclude:
-        clauses.append("installation_year <= ?")
-        params.append(year_max)
+    if (year_min is not None or year_max is not None) and "year_min" not in exclude and "year_max" not in exclude:
+        year_clause, year_params = _year_event_filter_clause(
+            year_min=year_min,
+            year_max=year_max,
+            year_event_types=year_event_types,
+            table_alias=table_alias,
+        )
+        clauses.append(year_clause)
+        params.extend(year_params)
     if bourdon_pitch and "bourdon_pitch" not in exclude:
-        clauses.append("bourdon_pitch = ?")
+        clauses.append(f"{col('bourdon_pitch')} = ?")
         params.append(bourdon_pitch)
     if transposition is not None and "transposition" not in exclude:
-        clauses.append("transposition_semitones = ?")
+        clauses.append(f"{col('transposition_semitones')} = ?")
         params.append(transposition)
     if range_class and "range_class" not in exclude:
-        clauses.append("range_classification = ?")
+        clauses.append(f"{col('range_classification')} = ?")
         params.append(range_class)
     if denomination and "denomination" not in exclude:
-        clauses.append("denomination = ?")
+        clauses.append(f"{col('denomination')} = ?")
         params.append(denomination)
     if institution_type and "institution_type" not in exclude:
-        clauses.append("institution_type = ?")
+        clauses.append(f"{col('institution_type')} = ?")
         params.append(institution_type)
     if instrument_type and "instrument_type" not in exclude:
-        clauses.append("LOWER(instrument_type) = LOWER(?)")
+        clauses.append(f"LOWER({col('instrument_type')}) = LOWER(?)")
         params.append(instrument_type)
     if bellfounder and "bellfounder" not in exclude:
-        clauses.append("bellfounder LIKE ?")
-        params.append(f"%{bellfounder}%")
+        part_clause, part_params = _bellfounder_part_clause(bellfounder, table_alias=table_alias)
+        clauses.append(part_clause)
+        params.extend(part_params)
     if map_only and "map_only" not in exclude:
-        clauses.append("latitude IS NOT NULL AND longitude IS NOT NULL")
+        clauses.append(f"{col('latitude')} IS NOT NULL AND {col('longitude')} IS NOT NULL")
 
     return clauses, params
 
@@ -145,6 +269,7 @@ def get_location_facets(
     state: str | None = None,
     year_min: int | None = None,
     year_max: int | None = None,
+    year_event_types: list[str] | None = None,
     bellfounder: str | None = None,
     bourdon_pitch: str | None = None,
     transposition: int | None = None,
@@ -160,6 +285,7 @@ def get_location_facets(
         state=state,
         year_min=year_min,
         year_max=year_max,
+        year_event_types=year_event_types,
         bellfounder=bellfounder,
         bourdon_pitch=bourdon_pitch,
         transposition=transposition,
@@ -242,13 +368,12 @@ def _founder_facet_rows(
     ).fetchall()
     counts: Counter[str] = Counter()
     for row in rows:
-        for part in str(row["bellfounder"]).split(";"):
-            name = part.strip()
-            if name:
-                counts[name] += 1
+        for part in split_founder_parts(row["bellfounder"]):
+            counts[part] += 1
     return [
         {"value": value, "label": value, "count": count}
         for value, count in sorted(counts.items(), key=lambda item: (-item[1], item[0].lower()))
+        if count >= MIN_FOUNDER_FACET_COUNT
     ]
 
 
@@ -264,6 +389,7 @@ def get_filter_facets(
     state: str | None = None,
     year_min: int | None = None,
     year_max: int | None = None,
+    year_event_types: list[str] | None = None,
     bellfounder: str | None = None,
     bourdon_pitch: str | None = None,
     transposition: int | None = None,
@@ -279,6 +405,7 @@ def get_filter_facets(
         state=state,
         year_min=year_min,
         year_max=year_max,
+        year_event_types=year_event_types,
         bellfounder=bellfounder,
         bourdon_pitch=bourdon_pitch,
         transposition=transposition,
@@ -294,8 +421,8 @@ def get_filter_facets(
         instrument_types = _instrument_type_facet_rows(conn, it_clauses, it_params)
 
         bp_clauses, bp_params = build_search_clauses(**base, exclude={"bourdon_pitch"})
-        bourdon_pitches = _facet_rows(
-            conn, "bourdon_pitch", bp_clauses, bp_params, order="value"
+        bourdon_pitches = sort_bourdon_pitch_facets(
+            _facet_rows(conn, "bourdon_pitch", bp_clauses, bp_params, order="value")
         )
 
         tr_clauses, tr_params = build_search_clauses(**base, exclude={"transposition"})
@@ -312,8 +439,8 @@ def get_filter_facets(
         ]
 
         rc_clauses, rc_params = build_search_clauses(**base, exclude={"range_class"})
-        range_classifications = _facet_rows(
-            conn, "range_classification", rc_clauses, rc_params
+        range_classifications = sort_range_classification_facets(
+            _facet_rows(conn, "range_classification", rc_clauses, rc_params)
         )
 
         bf_clauses, bf_params = build_search_clauses(**base, exclude={"bellfounder"})
@@ -346,17 +473,32 @@ def get_filter_options() -> dict[str, Any]:
         year_range = list(
             conn.execute(
                 """
-                SELECT MIN(installation_year), MAX(installation_year)
-                FROM site_index WHERE installation_year IS NOT NULL
+                SELECT
+                    MIN(CAST(json_extract(evt.value, '$.year') AS INTEGER)),
+                    MAX(CAST(json_extract(evt.value, '$.year') AS INTEGER))
+                FROM site_index
+                JOIN json_each(COALESCE(site_index.carillon_events, '[]')) AS evt
+                WHERE json_extract(evt.value, '$.type') = 'installed'
                 """
             ).fetchone()
         )
+        if year_range[0] is None:
+            year_range = list(
+                conn.execute(
+                    """
+                    SELECT MIN(installation_year), MAX(installation_year)
+                    FROM site_index WHERE installation_year IS NOT NULL
+                    """
+                ).fetchone()
+            )
     finally:
         conn.close()
 
     return {
         **get_filter_facets(),
         "year_range": year_range,
+        "year_event_types": EVENT_TYPE_OPTIONS,
+        "range_classification_legend": RANGE_CLASSIFICATION_LEGEND,
     }
 
 
@@ -368,6 +510,7 @@ def search_sites(
     state: str | None = None,
     year_min: int | None = None,
     year_max: int | None = None,
+    year_event_types: list[str] | None = None,
     bellfounder: str | None = None,
     bourdon_pitch: str | None = None,
     transposition: int | None = None,
@@ -385,6 +528,7 @@ def search_sites(
         state=state,
         year_min=year_min,
         year_max=year_max,
+        year_event_types=year_event_types,
         bellfounder=bellfounder,
         bourdon_pitch=bourdon_pitch,
         transposition=transposition,
@@ -393,33 +537,51 @@ def search_sites(
         institution_type=institution_type,
         instrument_type=instrument_type,
         map_only=map_only,
+        table_alias="i",
     )
     where = " AND ".join(clauses)
     conn = connect()
     try:
         total = conn.execute(
-            f"SELECT COUNT(*) FROM site_index WHERE {where}", params
+            f"SELECT COUNT(*) FROM site_index i INNER JOIN sites s ON s.site_id = i.site_id WHERE {where}",
+            params,
         ).fetchone()[0]
         rows = conn.execute(
             f"""
-            SELECT site_id, short_name, full_title, continent, country_code,
-                   state_province, installation_year, bourdon_pitch,
-                   transposition_semitones, range_classification, denomination,
-                   institution_type, bellfounder, instrument_type, bell_count,
-                   latitude, longitude
-            FROM site_index
+            SELECT i.site_id, i.short_name, i.continent, i.country_code,
+                   i.state_province, i.installation_year, i.bourdon_pitch,
+                   i.transposition_semitones, i.range_classification, i.denomination,
+                   i.institution_type, i.bellfounder, i.instrument_type, i.bell_count,
+                   i.latitude, i.longitude,
+                   s.full_title, s.display_title_override, s.location_text,
+                   s.location_display_override
+            FROM site_index i
+            INNER JOIN sites s ON s.site_id = i.site_id
             WHERE {where}
-            ORDER BY full_title, short_name
+            ORDER BY i.full_title, i.short_name
             LIMIT ?
             """,
             [*params, limit],
         ).fetchall()
         with_coords = sum(1 for r in rows if r["latitude"] is not None)
+        results = []
+        for row in rows:
+            item = row_to_dict(row)
+            title = display_title_for_site(item)
+            item["display_title"] = title
+            item["display_subtitle"] = format_site_subtitle(
+                country_code=item.get("country_code"),
+                state_province=item.get("state_province"),
+                bell_count=item.get("bell_count"),
+                installation_year=item.get("installation_year"),
+                bourdon_pitch=item.get("bourdon_pitch"),
+            )
+            results.append(item)
         return {
             "total": total,
-            "returned": len(rows),
+            "returned": len(results),
             "with_coordinates": with_coords,
-            "results": [row_to_dict(r) for r in rows],
+            "results": results,
         }
     finally:
         conn.close()
@@ -444,9 +606,14 @@ def get_site(site_id: str) -> dict[str, Any] | None:
             """,
             (site_id.upper(),),
         ).fetchall()
+        index_data = row_to_dict(index) if index else None
+        if index_data is not None:
+            index_data["carillon_events"] = events_from_json(index_data.get("carillon_events"))
+        site_data = row_to_dict(site)
         return {
-            "site": row_to_dict(site),
-            "index": row_to_dict(index) if index else None,
+            "site": site_data,
+            "index": index_data,
+            "display": build_site_display(site_data, index=index_data),
             "list_appearances": [row_to_dict(r) for r in lists],
         }
     finally:

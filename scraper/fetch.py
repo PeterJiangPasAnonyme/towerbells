@@ -34,4 +34,13 @@ def fetch(path: str, *, delay: bool = True) -> str:
     finally:
         _last_request_at = time.monotonic()
 
-    return html.decode("latin-1", errors="replace")
+    return _decode_response_bytes(html)
+
+
+def _decode_response_bytes(data: bytes) -> str:
+    for encoding in ("utf-8", "cp1252", "latin-1"):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("latin-1", errors="replace")

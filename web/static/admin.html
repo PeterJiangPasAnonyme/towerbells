@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Edit data — TowerBells</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body class="admin-page">
+  <header class="admin-header">
+    <div>
+      <a href="/" class="back-link">← Back to map</a>
+      <h1>Data editor</h1>
+      <p class="admin-lead">Search for a carillon and edit filter or detail fields without SQL.</p>
+    </div>
+  </header>
+
+  <div class="admin-layout">
+    <aside class="admin-search-panel">
+      <label class="admin-label" for="searchInput">Search</label>
+      <input type="search" id="searchInput" placeholder="Name, site ID, or bellfounder…" autofocus />
+
+      <p class="admin-hint">Examples: <code>MENEN</code>, <code>BEMNNHDV</code>, <code>Petit &amp; Fritsen</code></p>
+
+      <ul id="searchResults" class="admin-results"></ul>
+    </aside>
+
+    <main class="admin-editor-panel">
+      <div id="emptyState" class="admin-empty">
+        Select a carillon from the search results to edit it.
+      </div>
+
+      <form id="editForm" class="admin-form hidden" hidden>
+        <div class="admin-form-header">
+          <div>
+            <h2 id="formTitle"></h2>
+            <p id="formMeta" class="admin-meta"></p>
+          </div>
+          <div class="admin-form-actions-top">
+            <a id="viewLink" href="#" target="_blank" rel="noopener">View page ↗</a>
+          </div>
+        </div>
+
+        <div id="relatedRows" class="admin-related hidden"></div>
+
+        <fieldset>
+          <legend>Filter &amp; map fields <span class="admin-tag">site_index</span></legend>
+          <label>Bellfounder
+            <input type="text" name="bellfounder" placeholder="e.g. Taylor; VanBergen" />
+          </label>
+          <p class="field-hint">Separate multiple founders with semicolons. Names are canonicalized on save.</p>
+
+          <div class="admin-row">
+            <label>Installation year
+              <input type="number" name="installation_year" min="1000" max="2100" />
+            </label>
+            <label>Bourdon Pitch
+              <input type="text" name="bourdon_pitch" placeholder="e.g. C, C#, G" />
+            </label>
+            <label>Transposition (Semitones)
+              <input type="number" name="transposition_semitones" min="-24" max="24" />
+            </label>
+          </div>
+
+          <div class="admin-row">
+            <label>Range Classification
+              <input type="text" name="range_classification" />
+            </label>
+            <label>Denomination
+              <input type="text" name="denomination" />
+            </label>
+            <label>Institution Type
+              <input type="text" name="institution_type" />
+            </label>
+          </div>
+
+          <label>Instrument type
+            <input type="text" name="instrument_type" />
+          </label>
+
+          <div class="admin-row">
+            <label>Latitude
+              <input type="number" name="latitude" step="any" />
+            </label>
+            <label>Longitude
+              <input type="number" name="longitude" step="any" />
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Page header <span class="admin-tag">sites</span></legend>
+          <label>Page title
+            <input type="text" name="display_title_override" placeholder="Auto-generated from full title" />
+          </label>
+          <p class="field-hint">Shown as the main heading on the detail page and in search results. Save a custom value to override; clear and save to revert to auto-cleaning from <code>full_title</code>.</p>
+        </fieldset>
+
+        <fieldset>
+          <legend>Detail page fields <span class="admin-tag">sites</span></legend>
+          <label>Remarks
+            <textarea name="remarks" rows="4"></textarea>
+          </label>
+          <label>Prior history
+            <textarea name="prior_history" rows="6"></textarea>
+          </label>
+          <label>Technical data
+            <textarea name="technical_data" rows="4"></textarea>
+          </label>
+          <label>Location display (JSON)
+            <textarea name="location_display_override" rows="10" placeholder="Auto-filled from parsed location — edit and save to override"></textarea>
+          </label>
+          <p class="field-hint">Pre-filled with the current parsed location. Save to persist your edits; clear the field and save to revert to auto-parsing. Once saved, this JSON is the only source for the Location panel — empty arrays and <code>null</code> mean “do not show”. Edit <code>address_lines</code> separately if you remove text from <code>also_known_as</code>. The <code>badge</code> key (e.g. Mobile Carillon) appears in the page header, not the Location panel. Keys: badge, name, hide_name, also_known_as, address_lines, locality, notes, hide_maps.</p>
+          <label>Schedule display (JSON)
+            <textarea name="schedule_display_override" rows="10" placeholder="Auto-filled from parsed schedule — edit and save to override"></textarea>
+          </label>
+          <p class="field-hint">Pre-filled with the current parsed schedule. Save to persist your edits; clear the field and save to revert to auto-parsing. Keys: mode, badge, calendars (condition + days.mon…sun arrays), prose, hide_badge, force_prose.</p>
+          <label>Contact display (JSON)
+            <textarea name="contact_display_override" rows="10" placeholder="Auto-filled from parsed contact — edit and save to override"></textarea>
+          </label>
+          <p class="field-hint">Pre-filled with the current parsed contact. Save to persist your edits; clear the field and save to revert to auto-parsing. Keys: mode, badge, entries (person_name, person_title, organization, address_lines, phones, emails, websites), prose, force_prose.</p>
+          <label>Carillonist display (JSON)
+            <textarea name="carillonist_display_override" rows="10" placeholder="Auto-filled from parsed carillonist — edit and save to override"></textarea>
+          </label>
+          <p class="field-hint">Pre-filled with the parsed carillonist. Same entry shape as contact. Hidden automatically for unknown, none, or vacant. Clear and save to revert to auto-parsing.</p>
+        </fieldset>
+
+        <label class="admin-checkbox">
+          <input type="checkbox" name="apply_to_milestones" />
+          Apply changes to all milestone rows (<span id="milestonePrefix"></span>*)
+        </label>
+
+        <div class="admin-form-footer">
+          <p id="saveStatus" class="save-status" aria-live="polite"></p>
+          <button type="submit" class="admin-save">Save changes</button>
+        </div>
+      </form>
+    </main>
+  </div>
+
+  <script src="/static/admin.js"></script>
+</body>
+</html>
