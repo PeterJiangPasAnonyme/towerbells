@@ -254,12 +254,19 @@ function renderCarillonistPanel(carillonist) {
   return renderPeoplePanel("Carillonist", carillonist);
 }
 
+function formatPastLifespan(lifespan) {
+  if (!lifespan) return "";
+  if (lifespan === "(–)" || lifespan === "(-)") return "†";
+  return lifespan;
+}
+
 function renderPastTimelineCard(entry) {
   const cert = entry.cert_label
     ? `<span class="contact-person-cert">(${escapeHtml(entry.cert_label)})</span>`
     : "";
-  const lifespan = entry.lifespan
-    ? `<span class="past-timeline-lifespan">${escapeHtml(entry.lifespan)}</span>`
+  const lifespanText = formatPastLifespan(entry.lifespan);
+  const lifespan = lifespanText
+    ? `<span class="past-timeline-lifespan">${escapeHtml(lifespanText)}</span>`
     : "";
   const title = entry.person_title
     ? `<p class="contact-person-title">${escapeHtml(entry.person_title).replace(/\n/g, "<br>")}</p>`
@@ -268,43 +275,75 @@ function renderPastTimelineCard(entry) {
     ? `<span class="past-timeline-date">${escapeHtml(entry.date_label)}</span>`
     : "";
   const name = entry.person_name
-    ? `<p class="contact-person-name">${escapeHtml(entry.person_name)}${cert ? ` ${cert}` : ""} ${lifespan}</p>`
-    : "";
+    ? `<p class="contact-person-name">${dateLabel}${dateLabel ? " " : ""}${escapeHtml(entry.person_name)}${cert ? ` ${cert}` : ""} ${lifespan}</p>`
+    : dateLabel
+      ? `<p class="contact-person-name">${dateLabel}</p>`
+      : "";
   const flagClass =
     entry.flags?.some((f) => f.startsWith("placeholder")) ? " is-placeholder" : "";
   const kindClass = entry.kind ? ` past-timeline-card--${entry.kind}` : "";
 
-  return `<div class="past-timeline-card${flagClass}${kindClass}" data-entry-id="${escapeHtml(entry.id)}" style="--card-top:${entry.axis_start_pct ?? 0}%; --card-lane:${entry.lane ?? 0}">
-    <div class="past-timeline-connector" aria-hidden="true"></div>
+  return `<div class="past-timeline-card${flagClass}${kindClass}" data-entry-id="${escapeHtml(entry.id)}" style="top:${entry.layoutTopPx ?? 0}px">
     <div class="past-timeline-card-body">
-      ${dateLabel}
       ${name}
       ${title}
     </div>
   </div>`;
 }
 
-function assignPastTimelineLanes(entries) {
-  const sorted = [...entries].sort(
-    (a, b) => (a.start_year ?? 9999) - (b.start_year ?? 9999) || (a.end_year ?? 9999) - (b.end_year ?? 9999)
-  );
-  const laneEnds = [];
-  for (const entry of sorted) {
-    const start = entry.start_year ?? 0;
-    const end = entry.end_year ?? start;
-    let lane = 0;
-    while (lane < laneEnds.length && laneEnds[lane] > start) {
-      lane += 1;
+const PAST_CARD_EST_HEIGHT = 48;
+const PAST_CARD_GAP = 6;
+const PAST_TIMELINE_MAX_HEIGHT = 440;
+
+function computePastTimelineHeight(yearMin, yearMax, entryCount) {
+  const yearSpan = Math.max(yearMax - yearMin, 1);
+  const byYears = yearSpan * 2.6 + 36;
+  const byEntries = entryCount * (PAST_CARD_EST_HEIGHT + PAST_CARD_GAP) + 28;
+  return Math.round(Math.min(PAST_TIMELINE_MAX_HEIGHT, Math.max(200, Math.min(byYears, byEntries))));
+}
+
+function layoutPastTimelineCards(entries, timelineHeightPx) {
+  const items = entries
+    .filter((entry) => typeof entry.axis_start_pct === "number")
+    .map((entry) => {
+      const idealTopPx = (entry.axis_start_pct / 100) * timelineHeightPx;
+      return { entry, idealTopPx };
+    })
+    .sort((a, b) => a.idealTopPx - b.idealTopPx || (a.entry.start_year ?? 0) - (b.entry.start_year ?? 0));
+
+  const placed = [];
+  let maxBottom = 0;
+
+  for (const item of items) {
+    let topPx = Math.max(0, item.idealTopPx);
+
+    for (let pass = 0; pass < items.length + 1; pass += 1) {
+      let shifted = false;
+      for (const other of placed) {
+        const overlap =
+          topPx < other.bottom + PAST_CARD_GAP &&
+          topPx + PAST_CARD_EST_HEIGHT > other.top - PAST_CARD_GAP;
+        if (overlap) {
+          topPx = other.bottom + PAST_CARD_GAP;
+          shifted = true;
+        }
+      }
+      if (!shifted) break;
     }
-    entry.lane = lane;
-    laneEnds[lane] = end;
+
+    item.entry.layoutTopPx = Math.round(topPx);
+    const bottom = topPx + PAST_CARD_EST_HEIGHT;
+    placed.push({ top: topPx, bottom });
+    maxBottom = Math.max(maxBottom, bottom);
   }
+
+  return maxBottom;
 }
 
 function renderPastTimelineAxis(timeline) {
   const { year_min: yearMin, year_max: yearMax, entries } = timeline;
   const span = Math.max(yearMax - yearMin, 1);
-  const tickStep = span > 120 ? 20 : span > 60 ? 10 : span > 30 ? 5 : 1;
+  const tickStep = span > 120 ? 20 : span > 60 ? 10 : 5;
   const firstTick = Math.ceil(yearMin / tickStep) * tickStep;
   const ticks = [];
   for (let year = firstTick; year <= yearMax; year += tickStep) {
@@ -327,12 +366,22 @@ function renderPastTimelineAxis(timeline) {
 }
 
 function renderPastTimeline(timeline) {
-  assignPastTimelineLanes(timeline.entries || []);
+  const entries = timeline.entries || [];
+  let height = computePastTimelineHeight(
+    timeline.year_min,
+    timeline.year_max,
+    entries.length
+  );
+  let maxBottom = layoutPastTimelineCards(entries, height);
+  if (maxBottom + 16 > height) {
+    height = Math.ceil(maxBottom + 16);
+    maxBottom = layoutPastTimelineCards(entries, height);
+  }
+
   const label = timeline.label
     ? `<h3 class="past-timeline-subtitle">${escapeHtml(timeline.label)}</h3>`
     : "";
-  const cards = (timeline.entries || []).map((entry) => renderPastTimelineCard(entry)).join("");
-  const height = Math.max(320, Math.min(720, (timeline.year_max - timeline.year_min) * 4 + 120));
+  const cards = entries.map((entry) => renderPastTimelineCard(entry)).join("");
 
   return `<div class="past-timeline-block">
     ${label}
@@ -344,23 +393,10 @@ function renderPastTimeline(timeline) {
 }
 
 function renderPastUnknownCard(entry) {
-  const cert = entry.cert_label
-    ? `<span class="contact-person-cert">(${escapeHtml(entry.cert_label)})</span>`
-    : "";
-  const lifespan = entry.lifespan
-    ? `<span class="past-timeline-lifespan">${escapeHtml(entry.lifespan)}</span>`
-    : "";
-  const title = entry.person_title
-    ? `<p class="contact-person-title">${escapeHtml(entry.person_title).replace(/\n/g, "<br>")}</p>`
-    : "";
-  const dateLabel = entry.date_label
-    ? `<p class="past-timeline-date">${escapeHtml(entry.date_label)}</p>`
-    : "";
-  const name = entry.person_name
-    ? `<p class="contact-person-name">${escapeHtml(entry.person_name)}${cert ? ` ${cert}` : ""} ${lifespan}</p>`
-    : "";
-
-  return `<div class="past-timeline-unknown-card">${dateLabel}${name}${title}</div>`;
+  return renderPastTimelineCard(entry).replace(
+    'class="past-timeline-card',
+    'class="past-timeline-card past-timeline-unknown-inline'
+  );
 }
 
 function renderPastUnknownCards(entries) {
@@ -379,18 +415,95 @@ function bindPastTimelineHover(root) {
   });
 }
 
+function reflowPastTimelineCards(root) {
+  root.querySelectorAll(".past-timeline-wrap").forEach((wrap) => {
+    const cardsCol = wrap.querySelector(".past-timeline-cards-col");
+    if (!cardsCol) return;
+
+    const cards = [...cardsCol.querySelectorAll(".past-timeline-card")];
+    if (!cards.length) return;
+
+    const height = wrap.getBoundingClientRect().height;
+    const items = cards
+      .map((card) => {
+        const segment = wrap.querySelector(
+          `.past-timeline-segment[data-entry-id="${CSS.escape(card.dataset.entryId)}"]`
+        );
+        let idealTopPx = parseFloat(card.style.top) || 0;
+        if (segment) {
+          const segTop = parseFloat(segment.style.top) || 0;
+          idealTopPx = (segTop / 100) * height;
+        }
+        return { card, idealTopPx, cardHeight: card.offsetHeight || PAST_CARD_EST_HEIGHT };
+      })
+      .sort((a, b) => a.idealTopPx - b.idealTopPx);
+
+    const placed = [];
+    let maxBottom = 0;
+    for (const item of items) {
+      let topPx = Math.max(0, item.idealTopPx);
+      for (let pass = 0; pass < items.length + 1; pass += 1) {
+        let shifted = false;
+        for (const other of placed) {
+          const overlap =
+            topPx < other.bottom + PAST_CARD_GAP &&
+            topPx + item.cardHeight > other.top - PAST_CARD_GAP;
+          if (overlap) {
+            topPx = other.bottom + PAST_CARD_GAP;
+            shifted = true;
+          }
+        }
+        if (!shifted) break;
+      }
+      item.card.style.top = `${Math.round(topPx)}px`;
+      const bottom = topPx + item.cardHeight;
+      placed.push({ top: topPx, bottom });
+      maxBottom = Math.max(maxBottom, bottom);
+    }
+
+    const neededHeight = Math.ceil(maxBottom + 16);
+    if (neededHeight > height) {
+      wrap.style.setProperty("--timeline-height", `${neededHeight}px`);
+    }
+  });
+}
+
+function renderPastFlatCards(entries) {
+  if (!entries?.length) return "";
+  return `<div class="past-timeline-flat-cards">${renderPastUnknownCards(entries)}</div>`;
+}
+
 function renderPastCarillonistPanel(past) {
   if (!past?.has_content) return "";
 
+  const timelines = past.timelines || [];
+  let flatEntries = [...(past.unknown_time || [])];
+  const timelineBlocks = [];
+
+  for (const timeline of timelines) {
+    const entries = timeline.entries || [];
+    if (entries.length <= 1) {
+      flatEntries = flatEntries.concat(entries);
+    } else {
+      timelineBlocks.push(timeline);
+    }
+  }
+
+  const showOthersTitle = timelineBlocks.length > 0 && flatEntries.length > 0;
+
   const parts = ['<section class="past-carillonists-display"><h2>Past carillonists</h2>'];
-  for (const timeline of past.timelines || []) {
+  for (const timeline of timelineBlocks) {
     parts.push(renderPastTimeline(timeline));
   }
-  if (past.unknown_time?.length) {
-    parts.push(`<div class="past-timeline-unknown">
-      <h3 class="past-timeline-subtitle">Time unknown</h3>
-      <div class="past-timeline-unknown-cards">${renderPastUnknownCards(past.unknown_time)}</div>
-    </div>`);
+  if (flatEntries.length) {
+    if (showOthersTitle) {
+      parts.push(`<div class="past-timeline-unknown">
+        <h3 class="past-timeline-subtitle">Others</h3>
+        ${renderPastFlatCards(flatEntries)}
+      </div>`);
+    } else {
+      parts.push(renderPastFlatCards(flatEntries));
+    }
   }
   parts.push("</section>");
   return parts.join("");
@@ -498,7 +611,10 @@ async function load() {
     section("Prior history", site.prior_history),
   ].join("");
 
-  document.querySelectorAll(".past-carillonists-display").forEach(bindPastTimelineHover);
+  document.querySelectorAll(".past-carillonists-display").forEach((root) => {
+    reflowPastTimelineCards(root);
+    bindPastTimelineHover(root);
+  });
 
   const events = idx.carillon_events || [];
   if (events.length) {

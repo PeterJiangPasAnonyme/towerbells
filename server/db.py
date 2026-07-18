@@ -610,10 +610,15 @@ def get_site(site_id: str) -> dict[str, Any] | None:
         if index_data is not None:
             index_data["carillon_events"] = events_from_json(index_data.get("carillon_events"))
         site_data = row_to_dict(site)
+
+        def _lookup_site(site_id: str) -> dict[str, Any] | None:
+            row = conn.execute("SELECT * FROM sites WHERE site_id = ?", (site_id.upper(),)).fetchone()
+            return row_to_dict(row) if row else None
+
         return {
             "site": site_data,
             "index": index_data,
-            "display": build_site_display(site_data, index=index_data),
+            "display": build_site_display(site_data, index=index_data, get_site=_lookup_site),
             "list_appearances": [row_to_dict(r) for r in lists],
         }
     finally:

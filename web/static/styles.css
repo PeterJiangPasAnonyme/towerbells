@@ -1557,6 +1557,10 @@ body.map-fullscreen-open {
   }
 }
 
+.past-carillonists-display {
+  overflow: visible;
+}
+
 .past-carillonists-display h2 {
   margin: 0 0 0.65rem;
   font-size: 0.85rem;
@@ -1579,33 +1583,40 @@ body.map-fullscreen-open {
   color: var(--muted);
 }
 
+.past-timeline-block {
+  overflow: visible;
+}
+
 .past-timeline-wrap {
   position: relative;
   display: flex;
-  gap: 0;
-  height: var(--timeline-height, 420px);
-  min-height: 320px;
+  gap: 0.85rem;
+  height: var(--timeline-height, 280px);
+  min-height: 0;
+  overflow: visible;
 }
 
 .past-timeline-axis-col {
   position: relative;
   width: 4.5rem;
+  min-width: 4.5rem;
   flex-shrink: 0;
+  padding-left: 0.15rem;
 }
 
 .past-timeline-axis-line {
   position: absolute;
-  left: 50%;
+  right: 0;
   top: 0;
   bottom: 0;
   width: 2px;
-  transform: translateX(-50%);
   background: color-mix(in srgb, var(--accent) 45%, var(--border));
 }
 
 .past-timeline-ticks {
   position: absolute;
   inset: 0;
+  right: 0.5rem;
   pointer-events: none;
 }
 
@@ -1621,18 +1632,22 @@ body.map-fullscreen-open {
   font-size: 0.72rem;
   line-height: 1;
   color: var(--muted);
-  text-align: center;
+  text-align: right;
+  padding-right: 0.45rem;
 }
 
 .past-timeline-segments {
   position: absolute;
-  inset: 0;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 10px;
   pointer-events: none;
 }
 
 .past-timeline-segment {
   position: absolute;
-  left: calc(50% - 5px);
+  right: -4px;
   width: 10px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--accent) 28%, transparent);
@@ -1657,40 +1672,22 @@ body.map-fullscreen-open {
   position: relative;
   flex: 1;
   min-width: 0;
+  height: 100%;
 }
 
 .past-timeline-card {
   position: absolute;
-  left: calc(var(--card-lane, 0) * 1.4rem);
+  left: 0;
   right: 0;
-  top: var(--card-top, 0%);
-  transform: translateY(-0.65rem);
-  display: flex;
-  align-items: flex-start;
-  gap: 0;
   transition: opacity 0.15s ease;
-}
-
-.past-timeline-connector {
-  width: 1.25rem;
-  height: 2px;
-  margin-top: 0.85rem;
-  flex-shrink: 0;
-  background: color-mix(in srgb, var(--accent) 50%, var(--border));
-  transition: background 0.15s ease, height 0.15s ease;
-}
-
-.past-timeline-card.is-highlighted .past-timeline-connector {
-  background: var(--accent);
-  height: 3px;
 }
 
 .past-timeline-card-body {
   flex: 1;
   min-width: 0;
-  padding: 0.55rem 0.75rem;
+  padding: 0.35rem 0.55rem;
   border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  border-radius: 0.55rem;
+  border-radius: 0.45rem;
   background: color-mix(in srgb, var(--surface2) 88%, transparent);
   transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
 }
@@ -1710,39 +1707,48 @@ body.map-fullscreen-open {
 }
 
 .past-timeline-date {
-  display: block;
-  margin: 0 0 0.15rem;
   font-size: 0.74rem;
   font-weight: 600;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.02em;
   color: var(--accent);
+  margin-right: 0.35rem;
 }
 
 .past-timeline-lifespan {
   font-weight: 400;
-  font-size: 0.88rem;
+  font-size: 0.84rem;
   color: var(--muted);
 }
 
 .past-timeline-card .contact-person-name {
-  font-size: 1rem;
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+
+.past-timeline-card .contact-person-title {
+  margin: 0.1rem 0 0;
+  font-size: 0.78rem;
+  line-height: 1.3;
 }
 
 .past-timeline-unknown {
   margin-top: 1.75rem;
 }
 
+.past-timeline-flat-cards,
 .past-timeline-unknown-cards {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.55rem;
 }
 
-.past-timeline-unknown-card {
-  padding: 0.65rem 0.8rem;
-  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  border-radius: 0.55rem;
-  background: color-mix(in srgb, var(--surface2) 88%, transparent);
+.past-timeline-unknown-inline {
+  position: static !important;
+}
+
+.past-timeline-unknown-inline .past-timeline-card-body {
+  padding: 0.35rem 0.55rem;
 }
 
 @media (max-width: 700px) {
@@ -1782,11 +1788,5 @@ body.map-fullscreen-open {
 
   .past-timeline-card {
     position: static;
-    transform: none;
-    left: auto;
-  }
-
-  .past-timeline-connector {
-    display: none;
   }
 }

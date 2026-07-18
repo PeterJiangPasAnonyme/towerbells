@@ -211,6 +211,7 @@ def build_site_display(
     site: dict,
     *,
     index: dict | None = None,
+    get_site: Any | None = None,
 ) -> dict[str, Any]:
     index = index or {}
     bell_count = site.get("bell_count") or index.get("bell_count")
@@ -229,7 +230,7 @@ def build_site_display(
     carillonist_override = parse_carillonist_override(site.get("carillonist_display_override"))
     carillonist = build_carillonist_display(site, override=carillonist_override)
     past_override = parse_past_carillonist_override(site.get("past_carillonist_display_override"))
-    past_carillonists = build_past_carillonist_display(site, override=past_override)
+    past_carillonists = build_past_carillonist_display(site, override=past_override, get_site=get_site)
     badge = location.get("badge")
     return {
         "title": title,

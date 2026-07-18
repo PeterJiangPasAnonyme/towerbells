@@ -36,9 +36,9 @@ DEDICATION_RE = re.compile(
 YEAR_RANGE_RE = re.compile(
     r"^\s*(?:"
     r"(?P<circa>c\.?\s*)?"
-    r"(?P<start>\d{4}|\d{2,4}[?xX_]+|\?\?|\d\?|\?\d|\d_\d|\d{3}\?)"
+    r"(?P<start>\d{4}|\d{2,4}[?xX_]+|\?\?|\?|\d\?|\?\d|\d_\d|\d{3}\?)"
     r"(?:\s*[-–—:]\s*"
-    r"(?P<end>\d{4}|\d{2,4}(?:[?xX_]+)?|\?\?|\d\?|\?\d|xx|19xx|20xx|\d_\d|\d{3}\?))?"
+    r"(?P<end>\d{1,4}(?:[?xX_]+)?|\?\?|\?|\d\?|\?\d|xx|19xx|20xx|\d_\d|\d{3}\?))?"
     r")\s*(?P<rest>.*)?$",
     re.I,
 )
@@ -58,6 +58,82 @@ YEAR_UNCERTAIN_RE = re.compile(r"[?xX_]|19xx|20xx|\?\?", re.I)
 
 AND_SPLIT_RE = re.compile(r"\s*-\s*and\s*-", re.I)
 
+SEE_REF_SITE_MAP = {
+    "BLOOMINGTON-1": "INBLOOM1A",
+    "INBLOOM1A": "INBLOOM1A",
+}
+
+TITLE_LIKE_LINE_RE = re.compile(
+    r"^(University|Assistant|City|Interim|and\s|Prof\.|Director of)",
+    re.I,
+)
+
+
+def _sanitize_year_token(token: str) -> str:
+    return token.replace("_", "").strip()
+
+
+def _title_case_parens(text: str) -> str:
+    if not text:
+        return text
+
+    def repl(match: re.Match[str]) -> str:
+        inner = match.group(1)
+        if re.match(r"^[\d?xX\-–—. †]+$", inner):
+            return match.group(0)
+        if inner.upper() in {"C", "A", "CH", "D."}:
+            return match.group(0)
+        return f"({inner.title()})"
+
+    return re.sub(r"\(([^)]+)\)", repl, text)
+
+
+def _is_person_name_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped or not stripped[0].isupper():
+        return False
+    if YEAR_RANGE_RE.match(stripped) or DEDICATION_RE.search(stripped):
+        return False
+    if PLACEHOLDER_RE.match(stripped):
+        return False
+    if TITLE_LIKE_LINE_RE.match(stripped):
+        return False
+    if re.match(r"^\(see\b", stripped, re.I):
+        return False
+    return True
+
+
+def _is_skipped_placeholder(label: str) -> bool:
+    return label.strip().lower() in {"unknown", "none"}
+
+
+def _see_ref_target(raw: str) -> str | None:
+    match = re.match(r"^\(see\s+([^)]+)\)\s*$", raw.strip(), re.I)
+    if not match:
+        return None
+    key = match.group(1).strip().upper().replace(" ", "")
+    return SEE_REF_SITE_MAP.get(key)
+
+
+def _should_skip_entry(entry: dict[str, Any]) -> bool:
+    if entry.get("kind") == "placeholder":
+        flags = entry.get("flags") or []
+        if any(f in flags for f in ("placeholder_unknown", "placeholder_none")):
+            return True
+        label = (entry.get("person_name") or "").strip("()").lower()
+        return _is_skipped_placeholder(label)
+    return False
+
+
+def _format_entry_for_display(entry: dict[str, Any]) -> dict[str, Any]:
+    if entry.get("person_name"):
+        entry["person_name"] = _title_case_parens(entry["person_name"])
+    if entry.get("person_title"):
+        entry["person_title"] = _title_case_parens(entry["person_title"])
+    if entry.get("date_label"):
+        entry["date_label"] = entry["date_label"].replace("_", "")
+    return entry
+
 
 def parse_past_carillonist_override(raw: str | None) -> dict[str, Any] | None:
     if not raw or not str(raw).strip():
@@ -72,11 +148,17 @@ def parse_past_carillonist_override(raw: str | None) -> dict[str, Any] | None:
 
 
 def _expand_end_year(start: int, end_token: str) -> int | None:
-    token = end_token.strip()
+    token = _sanitize_year_token(end_token.strip())
     if YEAR_UNCERTAIN_RE.search(token):
         return None
     if len(token) == 4 and token.isdigit():
         return int(token)
+    if len(token) == 1 and token.isdigit():
+        decade_base = (start // 10) * 10
+        year = decade_base + int(token)
+        if year < start:
+            year += 10
+        return year
     if len(token) <= 2 and token.isdigit():
         century = (start // 100) * 100
         year = century + int(token)
@@ -87,7 +169,9 @@ def _expand_end_year(start: int, end_token: str) -> int | None:
 
 
 def _parse_year_token(token: str) -> int | None:
-    token = token.strip()
+    token = _sanitize_year_token(token.strip())
+    if not token or token == "?":
+        return None
     if YEAR_UNCERTAIN_RE.search(token):
         return None
     if len(token) == 4 and token.isdigit():
@@ -110,7 +194,7 @@ def _extract_lifespan(text: str) -> tuple[str, str | None]:
         break
 
     if not lifespan and DEATH_UNKNOWN_RE.search(text):
-        lifespan = "(–)"
+        lifespan = "†"
         text = DEATH_UNKNOWN_RE.sub("", text)
 
     text = re.sub(r"\s+", " ", text).strip(" ,;")
@@ -132,10 +216,14 @@ def _extract_cert(text: str) -> tuple[str, str | None]:
 
 
 def _format_date_label(start: int | None, end: int | None, *, raw_range: str | None = None) -> str | None:
+    if start is None and end is None:
+        return raw_range.strip() if raw_range else None
+    if start is None and end is not None:
+        return f"–{end}"
+    if end is None:
+        return f"{start}–" if start is not None else (raw_range.strip() if raw_range else None)
     if start is None:
         return raw_range.strip() if raw_range else None
-    if end is None:
-        return raw_range.strip() if raw_range else str(start)
     if start == end:
         return str(start)
     if end // 100 == start // 100:
@@ -156,6 +244,8 @@ def _is_block_start(line: str) -> bool:
     if DEDICATION_RE.search(stripped):
         return True
     if YEAR_RANGE_RE.match(stripped):
+        return True
+    if _is_person_name_line(stripped):
         return True
     return False
 
@@ -185,10 +275,14 @@ def _parse_year_tokens(
     circa: str | None = None,
 ) -> tuple[int | None, int | None, str | None, list[str]]:
     flags: list[str] = []
-    start_token = (start_token or "").strip()
-    end_token = (end_token or "").strip() if end_token else None
+    start_token = _sanitize_year_token((start_token or "").strip())
+    end_token = _sanitize_year_token(end_token.strip()) if end_token else None
 
-    if YEAR_UNCERTAIN_RE.search(start_token):
+    if not start_token or start_token == "?":
+        start = None
+        if start_token == "?":
+            flags.append("partial_dates")
+    elif YEAR_UNCERTAIN_RE.search(start_token):
         flags.append("partial_dates")
         start = None
     else:
@@ -196,7 +290,9 @@ def _parse_year_tokens(
 
     end: int | None = None
     if end_token:
-        if YEAR_UNCERTAIN_RE.search(end_token):
+        if not end_token or end_token == "?":
+            flags.append("partial_dates")
+        elif YEAR_UNCERTAIN_RE.search(end_token):
             flags.append("partial_dates")
         elif start is not None:
             end = _expand_end_year(start, end_token)
@@ -206,10 +302,10 @@ def _parse_year_tokens(
     if circa:
         flags.append("circa_date")
 
-    label_parts = [start_token]
-    if end_token:
-        label_parts.append(end_token)
-    raw_range = "–".join(label_parts) if start is None else None
+    raw_range = None
+    if start is None:
+        parts = [p for p in (start_token, end_token) if p]
+        raw_range = "–".join(parts) if parts else None
     date_label = _format_date_label(start, end, raw_range=raw_range)
     return start, end, date_label, flags
 
@@ -280,6 +376,8 @@ def _parse_block(block: str) -> dict[str, Any]:
     placeholder = PLACEHOLDER_RE.match(first)
     if placeholder:
         label = placeholder.group("label").strip().lower()
+        if _is_skipped_placeholder(label):
+            return _entry_base(kind="skip", flags=["placeholder_skipped"], raw=raw)
         if label == "unknown":
             flags.append("placeholder_unknown")
         elif label == "none":
@@ -343,11 +441,13 @@ def _parse_block(block: str) -> dict[str, Any]:
             circa=range_match.group("circa"),
         )
         flags.extend(range_flags)
-        rest = (range_match.group("rest") or "").strip()
+        rest = (range_match.group("rest") or "").strip().lstrip(":").strip()
 
         inline_placeholder = PLACEHOLDER_RE.match(rest) if rest else None
         if inline_placeholder:
             label = inline_placeholder.group("label").strip().lower()
+            if _is_skipped_placeholder(label):
+                return _entry_base(kind="skip", flags=["placeholder_skipped"], raw=raw)
             if label == "unknown":
                 flags.append("placeholder_unknown")
             elif label == "none":
@@ -375,12 +475,17 @@ def _parse_block(block: str) -> dict[str, Any]:
             titles: list[str] = []
             for cont in lines[1:]:
                 cont_clean, life = _extract_lifespan(cont)
+                cont_clean, cont_cert = _extract_cert(cont_clean)
+                if _is_person_name_line(cont_clean):
+                    break
                 if life:
                     lifespan = lifespan or life
                 elif re.match(r"^\(\d{4}", cont_clean):
                     _, life2 = _extract_lifespan(cont_clean)
                     lifespan = lifespan or life2
                 elif cont_clean:
+                    if cont_cert and not cert:
+                        cert = cont_cert
                     titles.append(cont_clean)
             if titles:
                 title = "\n".join(titles)
@@ -425,29 +530,26 @@ def _parse_block(block: str) -> dict[str, Any]:
     )
 
 
-def _timeline_bounds(entries: list[dict[str, Any]]) -> tuple[int | None, int | None]:
-    years: list[int] = []
-    for entry in entries:
-        for key in ("start_year", "end_year"):
-            val = entry.get(key)
-            if isinstance(val, int):
-                years.append(val)
-    if not years:
-        return None, None
-    return min(years), max(years)
-
-
 def _assign_timeline_positions(entries: list[dict[str, Any]], *, year_min: int, year_max: int) -> None:
     span = max(year_max - year_min, 1)
     for entry in entries:
         start = entry.get("start_year")
-        end = entry.get("end_year") or start
-        if not isinstance(start, int):
+        end = entry.get("end_year")
+        anchor = entry.get("anchor_year")
+        if anchor is None:
+            if isinstance(start, int):
+                anchor = start
+            elif isinstance(end, int):
+                anchor = end
+        if not isinstance(anchor, int):
             continue
-        if not isinstance(end, int):
-            end = start
-        entry["axis_start_pct"] = round((start - year_min) / span * 100, 2)
-        entry["axis_end_pct"] = round((end - year_min) / span * 100, 2)
+        if isinstance(start, int) and isinstance(end, int):
+            entry["axis_start_pct"] = round((start - year_min) / span * 100, 2)
+            entry["axis_end_pct"] = round((end - year_min) / span * 100, 2)
+        else:
+            point = round((anchor - year_min) / span * 100, 2)
+            entry["axis_start_pct"] = point
+            entry["axis_end_pct"] = point
 
 
 def _apply_override(result: dict[str, Any], override: dict[str, Any] | None) -> dict[str, Any]:
@@ -461,10 +563,35 @@ def _apply_override(result: dict[str, Any], override: dict[str, Any] | None) -> 
     return result
 
 
+def _timeline_bounds(entries: list[dict[str, Any]]) -> tuple[int | None, int | None]:
+    years: list[int] = []
+    for entry in entries:
+        for key in ("start_year", "end_year", "anchor_year"):
+            val = entry.get(key)
+            if isinstance(val, int):
+                years.append(val)
+    if not years:
+        return None, None
+    return min(years), max(years)
+
+
+def _classify_entry(entry: dict[str, Any]) -> str:
+    """Return 'timed', 'others', or 'skip'."""
+    if _should_skip_entry(entry) or entry.get("kind") == "skip":
+        return "skip"
+    start = entry.get("start_year")
+    end = entry.get("end_year")
+    if isinstance(start, int) or isinstance(end, int):
+        entry["anchor_year"] = start if isinstance(start, int) else end
+        return "timed"
+    return "others"
+
+
 def build_past_carillonist_display(
     site: dict,
     *,
     override: dict[str, Any] | None = None,
+    get_site: Any | None = None,
 ) -> dict[str, Any]:
     raw = (site.get("past_carillonists") or "").strip()
     if not raw:
@@ -476,6 +603,12 @@ def build_past_carillonist_display(
         }
         return _apply_override(result, override)
 
+    see_target = _see_ref_target(raw)
+    if see_target and get_site:
+        other = get_site(see_target)
+        if other and (other.get("past_carillonists") or "").strip():
+            return build_past_carillonist_display(other, override=override, get_site=get_site)
+
     all_flags: list[dict[str, Any]] = []
     parsed_entries: list[dict[str, Any]] = []
 
@@ -483,14 +616,21 @@ def build_past_carillonist_display(
         segment = segment.strip()
         if not segment:
             continue
-        if AND_SPLIT_RE.search(raw):
-            pass  # flag below per block if needed
         for block in _split_blocks(segment):
-            entry = _parse_block(block)
+            entry = _format_entry_for_display(_parse_block(block))
+            if entry.get("kind") == "skip":
+                continue
             entry["id"] = f"pc-{len(parsed_entries)}"
             parsed_entries.append(entry)
             for flag in entry.get("flags") or []:
-                all_flags.append({"site_id": site.get("site_id"), "entry_id": entry["id"], "flag": flag, "raw": entry.get("raw")})
+                all_flags.append(
+                    {
+                        "site_id": site.get("site_id"),
+                        "entry_id": entry["id"],
+                        "flag": flag,
+                        "raw": entry.get("raw"),
+                    }
+                )
 
     silent_entries = [e for e in parsed_entries if e.get("kind") == "silent"]
     timed_entries: list[dict[str, Any]] = []
@@ -500,36 +640,15 @@ def build_past_carillonist_display(
         kind = entry.get("kind")
         if kind == "silent":
             continue
-        if kind == "unknown_time":
-            unknown_time.append(entry)
+        if kind == "cross_ref":
             continue
-        start = entry.get("start_year")
-        has_uncertain = "partial_dates" in (entry.get("flags") or []) and (
-            start is None or entry.get("end_year") is None and "?" in (entry.get("date_label") or "")
-        )
-        if kind in ("tenure", "placeholder", "dedication", "cross_ref"):
-            if start is None:
-                unknown_time.append(entry)
-            elif has_uncertain and start is None:
-                unknown_time.append(entry)
-            else:
-                timed_entries.append(entry)
-        else:
+        bucket = _classify_entry(entry)
+        if bucket == "skip":
+            continue
+        if bucket == "timed":
             timed_entries.append(entry)
-
-    # Entries with uncertain start (19??) but known end → unknown section
-    still_timed: list[dict[str, Any]] = []
-    for entry in timed_entries:
-        raw_line = entry.get("raw") or ""
-        if re.search(r"19\?\?|19xx|\?\?-|^\s*\?\?", raw_line, re.I) and entry.get("start_year") is None:
-            entry.setdefault("flags", []).append("partial_dates")
-            unknown_time.append(entry)
-        elif re.match(r"^\s*(?:19\?\?|19xx|\?\?|\d\?|\?\d)", raw_line, re.I):
-            entry.setdefault("flags", []).append("partial_dates")
-            unknown_time.append(entry)
         else:
-            still_timed.append(entry)
-    timed_entries = still_timed
+            unknown_time.append(entry)
 
     timelines: list[dict[str, Any]] = []
     year_min, year_max = _timeline_bounds(timed_entries)
