@@ -26,6 +26,18 @@ _FOUNDER_ALIASES = {
     "noorden & degrave": "Noorden & DeGrave",
 }
 
+# Initials abbreviations used on towerbells.org (e.g. P&F, G&J).
+_FOUNDER_ABBREVIATIONS = {
+    "a&f": "Alexis & François Jolly",
+    "b&e": "Borchard & Eckhof",
+    "g&j": "Gillett & Johnston",
+    "m&c": "Meeks, Watson & Co",
+    "m&w": "Meeks, Watson & Co",
+    "n&d": "Noorden & DeGrave",
+    "p&f": "Petit & Fritsen",
+    "w&j": "Willem & Jaspar Moer",
+}
+
 
 def _founder_alias_key(name: str) -> str:
     return re.sub(r"\s*,\s*", ",", name.strip().lower())
@@ -33,6 +45,20 @@ def _founder_alias_key(name: str) -> str:
 
 def _apply_founder_alias(name: str) -> str:
     return _FOUNDER_ALIASES.get(_founder_alias_key(name), name)
+
+
+def _normalize_founder_abbrev_key(name: str) -> str:
+    text = name.strip().lower()
+    text = re.sub(r"\s*&\s*", "&", text)
+    return text.rstrip(".")
+
+
+def _expand_founder_abbreviation(name: str) -> str:
+    """Expand towerbells-style initials abbreviations such as P&F or G&J."""
+    key = _normalize_founder_abbrev_key(name)
+    if key in _FOUNDER_ABBREVIATIONS:
+        return _FOUNDER_ABBREVIATIONS[key]
+    return name
 
 
 def _strip_founder_years(name: str) -> str:
@@ -84,6 +110,7 @@ def canonical_founder_name(value: str | None) -> str:
     if not name:
         return ""
 
+    name = _expand_founder_abbreviation(name)
     name = _strip_founder_years(name)
     name = _merge_founder_family(name)
     return _apply_founder_alias(name)

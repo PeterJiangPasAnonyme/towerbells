@@ -488,11 +488,14 @@ def _apply_override(result: dict[str, Any], override: dict[str, Any] | None) -> 
     if "badge" in override:
         badge = override["badge"]
         result["badge"] = str(badge).strip() if badge else None
-    if "calendars" in override and isinstance(override["calendars"], list):
-        result["calendars"] = override["calendars"]
-        if override["calendars"]:
-            result["mode"] = "structured"
-            result["badge"] = None
+    if "calendars" in override:
+        if isinstance(override["calendars"], list):
+            result["calendars"] = override["calendars"]
+            if override["calendars"]:
+                result["mode"] = "structured"
+                result["badge"] = None
+        else:
+            result["calendars"] = []
     if "prose" in override:
         prose = override["prose"]
         result["prose"] = str(prose).strip() if prose else None

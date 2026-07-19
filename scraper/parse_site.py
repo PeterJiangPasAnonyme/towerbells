@@ -3,7 +3,9 @@ import re
 from dataclasses import asdict, dataclass, field
 
 from scraper.instrument_types import normalize_instrument_type
-from scraper.text import clean_html_fragment
+from scraper.person_sections import resolve_person_sections
+from scraper.technical_sections import split_technical_sections
+from scraper.text import clean_html_fragment, normalize_remarks_reference, reflow_wrapped_prose
 
 SECTION_RE = re.compile(
     r"<b>\*([^:<]+):</b>\s*(?:<pre>)?(.*?)(?=</pre>|<p>\s*<b>\*|<b>\*|\Z)",
@@ -142,7 +144,11 @@ def _parse_technical(technical: str, parsed: ParsedSite) -> None:
     if m:
         parsed.transposition = m.group(1).strip()
 
-    m = re.search(r"(There is one missing bass semitone|No missing bass semitone)", technical, re.I)
+    m = re.search(
+        r"(There are two missing bass semitones|There is one missing bass semitone|No missing bass semitone)",
+        technical,
+        re.I,
+    )
     if m:
         parsed.missing_bass_semitone = m.group(1).strip()
 
@@ -155,9 +161,10 @@ def _parse_technical(technical: str, parsed: ParsedSite) -> None:
         parsed.retuned_year = int(m.group(1))
         parsed.retuned_by = m.group(1 + 1).strip()
 
-    m = re.search(r"Prior history:(.*)", technical, re.I | re.S)
+    m = re.search(r"Prior history\s*:", technical, re.I)
     if m:
-        parsed.prior_history = _clean_html(m.group(1))
+        _, prior_history, _ = split_technical_sections(technical)
+        parsed.prior_history = _clean_html(prior_history) if prior_history else ""
 
     m = re.search(r"Auxiliary mechanisms:\s*(.+?)(?:\n|$)", technical, re.I)
     if m:
@@ -216,18 +223,24 @@ def parse_site_page(site_id: str, html: str, page_filename: str, page_url: str) 
         parsed.latitude, parsed.longitude = _parse_coords(parsed.location_text)
     if parsed.latitude is None:
         parsed.latitude, parsed.longitude = parse_coordinates_from_text(html)
-    if "Carillonist" in sections:
-        parsed.carillonist = sections["Carillonist"]
-    if "Past carillonists" in sections:
-        parsed.past_carillonists = sections["Past carillonists"]
     if "Contact" in sections:
         parsed.contact = sections["Contact"]
     if "Schedule" in sections:
         parsed.schedule = sections["Schedule"]
     if "Remarks" in sections:
-        parsed.remarks = sections["Remarks"]
+        parsed.remarks = reflow_wrapped_prose(sections["Remarks"])
     if "Technical data" in sections:
-        _parse_technical(sections["Technical data"], parsed)
+        technical = normalize_remarks_reference(sections["Technical data"])
+        _parse_technical(technical, parsed)
+    person = resolve_person_sections(
+        sections,
+        instrument_type=parsed.instrument_type,
+        technical_data=parsed.technical_data,
+    )
+    if person.current_text:
+        parsed.carillonist = person.current_text
+    if person.past_text:
+        parsed.past_carillonists = person.past_text
     if "Status" in sections:
         _parse_status(sections["Status"], parsed)
 

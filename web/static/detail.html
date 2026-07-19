@@ -5,17 +5,28 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Carillon — TowerBells</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260719o" />
 </head>
 <body class="detail-page">
   <header class="detail-header">
     <div class="detail-header-links">
       <a href="/" class="back-link">← Back to map</a>
-      <a id="editLink" class="edit-link" href="#">Edit data</a>
+      <div class="header-actions">
+        <a
+          id="legacyLink"
+          class="legacy-badge hidden"
+          href="#"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-hidden="true"
+        >Old Towerbells Page</a>
+        <a id="editLink" class="edit-link" href="#">Edit data</a>
+      </div>
     </div>
     <div class="detail-title-block">
       <div class="detail-title-main">
         <h1 id="title">Loading…</h1>
+        <p id="titleTranslation" class="detail-title-translation hidden" aria-hidden="true"></p>
         <p id="subtitle"></p>
       </div>
       <span id="titleBadge" class="detail-badge hidden" aria-hidden="true"></span>
@@ -42,6 +53,7 @@
     <div id="fullMap" class="full-map"></div>
   </div>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="/static/detail.js"></script>
+  <script src="/static/filters.js?v=20260719b"></script>
+  <script src="/static/detail.js?v=20260719n"></script>
 </body>
 </html>

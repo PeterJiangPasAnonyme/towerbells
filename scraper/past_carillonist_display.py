@@ -6,6 +6,8 @@ import json
 import re
 from typing import Any
 
+from scraper.person_sections import person_section_display_title, resolve_person_sections_for_site
+
 CERT_A_RE = re.compile(r"\(A\)|\(Associate Carillonneur\)", re.I)
 CERT_C_RE = re.compile(r"\(C\)|\(Carillonneur\)|\(Certified Carillonneur\)", re.I)
 CERT_CH_RE = re.compile(r"\(CH[^)]*\)", re.I)
@@ -45,6 +47,14 @@ YEAR_RANGE_RE = re.compile(
 
 PLACEHOLDER_RE = re.compile(
     r"^\s*\((?P<label>unknown|none|students|various[^)]*)\)\s*$",
+    re.I,
+)
+VACANT_NAME_RE = re.compile(
+    r"^\(?\s*(?:"
+    r"none\s+appointed|not\s+(?:yet\s+)?appointed|"
+    r"position\s+vacant|"
+    r"applications\s+wanted"
+    r")(?:[^)]*)?\)?\s*$",
     re.I,
 )
 SILENT_RE = re.compile(r"\(carillon\s+silent\)", re.I)
@@ -107,6 +117,18 @@ def _is_skipped_placeholder(label: str) -> bool:
     return label.strip().lower() in {"unknown", "none"}
 
 
+def _is_vacant_person_name(name: str | None) -> bool:
+    if not name:
+        return False
+    text = name.strip()
+    if not text:
+        return False
+    if VACANT_NAME_RE.match(text):
+        return True
+    inner = text.strip("()").strip()
+    return bool(VACANT_NAME_RE.match(inner) or _is_skipped_placeholder(inner))
+
+
 def _see_ref_target(raw: str) -> str | None:
     match = re.match(r"^\(see\s+([^)]+)\)\s*$", raw.strip(), re.I)
     if not match:
@@ -122,6 +144,8 @@ def _should_skip_entry(entry: dict[str, Any]) -> bool:
             return True
         label = (entry.get("person_name") or "").strip("()").lower()
         return _is_skipped_placeholder(label)
+    if _is_vacant_person_name(entry.get("person_name")):
+        return True
     return False
 
 
@@ -443,6 +467,9 @@ def _parse_block(block: str) -> dict[str, Any]:
         flags.extend(range_flags)
         rest = (range_match.group("rest") or "").strip().lstrip(":").strip()
 
+        if rest and _is_vacant_person_name(rest):
+            return _entry_base(kind="skip", flags=["vacant_skipped"], raw=raw)
+
         inline_placeholder = PLACEHOLDER_RE.match(rest) if rest else None
         if inline_placeholder:
             label = inline_placeholder.group("label").strip().lower()
@@ -493,6 +520,9 @@ def _parse_block(block: str) -> dict[str, Any]:
         name_part, life_from_name = _extract_lifespan(name_part or "")
         lifespan = lifespan or life_from_name
         name_part, cert = _extract_cert(name_part or "")
+
+        if _is_vacant_person_name(name_part):
+            return _entry_base(kind="skip", flags=["vacant_skipped"], raw=raw)
 
         if not name_part and title:
             name_part, title = title, None
@@ -593,13 +623,21 @@ def build_past_carillonist_display(
     override: dict[str, Any] | None = None,
     get_site: Any | None = None,
 ) -> dict[str, Any]:
-    raw = (site.get("past_carillonists") or "").strip()
+    resolved = resolve_person_sections_for_site(site)
+    raw = resolved.past_text.strip()
+    title = person_section_display_title(
+        resolved.past_label,
+        role="past",
+        instrument_type=site.get("instrument_type"),
+        technical_data=site.get("technical_data"),
+    )
     if not raw:
         result = {
             "has_content": False,
             "timelines": [],
             "unknown_time": [],
             "flags": [],
+            "title": title,
         }
         return _apply_override(result, override)
 
@@ -686,6 +724,7 @@ def build_past_carillonist_display(
         "timelines": timelines,
         "unknown_time": unknown_time,
         "flags": all_flags,
+        "title": title,
     }
     return _apply_override(result, override)
 

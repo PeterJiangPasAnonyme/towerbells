@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from scraper.contact_display import _entry_has_content, _parse_block
+from scraper.person_sections import person_section_display_title, resolve_person_sections_for_site
 
 CERT_A_RE = re.compile(r"\(A\)|\(Associate Carillonneur\)", re.I)
 CERT_C_RE = re.compile(r"\(C\)|\(Carillonneur\)|\(Certified Carillonneur\)", re.I)
@@ -99,10 +100,13 @@ def _apply_override(result: dict[str, Any], override: dict[str, Any] | None) -> 
 
     if "mode" in override:
         result["mode"] = override["mode"]
-    if "entries" in override and isinstance(override["entries"], list):
-        result["entries"] = override["entries"]
-        if override["entries"]:
-            result["mode"] = "structured"
+    if "entries" in override:
+        if isinstance(override["entries"], list):
+            result["entries"] = override["entries"]
+            if override["entries"]:
+                result["mode"] = "structured"
+        else:
+            result["entries"] = []
     if "prose" in override:
         prose = override["prose"]
         result["prose"] = str(prose).strip() if prose else None
@@ -119,7 +123,14 @@ def build_carillonist_display(
     *,
     override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    raw = (site.get("carillonist") or "").strip()
+    resolved = resolve_person_sections_for_site(site)
+    raw = resolved.current_text.strip()
+    title = person_section_display_title(
+        resolved.current_label,
+        role="current",
+        instrument_type=site.get("instrument_type"),
+        technical_data=site.get("technical_data"),
+    )
     result: dict[str, Any]
 
     if _should_hide(raw):
@@ -128,6 +139,7 @@ def build_carillonist_display(
             "entries": [],
             "prose": None,
             "has_content": False,
+            "title": title,
         }
     else:
         entries: list[dict[str, Any]] = []
@@ -145,6 +157,7 @@ def build_carillonist_display(
                 "entries": entries,
                 "prose": None,
                 "has_content": True,
+                "title": title,
             }
         elif raw:
             prose, _ = _extract_cert_from_text(raw)
@@ -153,6 +166,7 @@ def build_carillonist_display(
                 "entries": [],
                 "prose": prose or raw,
                 "has_content": True,
+                "title": title,
             }
         else:
             result = {
@@ -160,6 +174,7 @@ def build_carillonist_display(
                 "entries": [],
                 "prose": None,
                 "has_content": False,
+                "title": title,
             }
 
     return _apply_override(result, override)

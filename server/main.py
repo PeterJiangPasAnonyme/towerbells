@@ -18,19 +18,26 @@ app = FastAPI(title="TowerBells Explorer", version="0.1.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
+def _html_page(filename: str) -> FileResponse:
+    return FileResponse(
+        STATIC_DIR / filename,
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
 @app.get("/")
 def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+    return _html_page("index.html")
 
 
 @app.get("/carillon/{site_id}")
 def carillon_page(site_id: str) -> FileResponse:
-    return FileResponse(STATIC_DIR / "detail.html")
+    return _html_page("detail.html")
 
 
 @app.get("/admin")
 def admin_page() -> FileResponse:
-    return FileResponse(STATIC_DIR / "admin.html")
+    return _html_page("admin.html")
 
 
 class SiteUpdatePayload(BaseModel):

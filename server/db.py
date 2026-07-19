@@ -38,6 +38,8 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE sites ADD COLUMN location_display_override TEXT")
     if "display_title_override" not in columns:
         conn.execute("ALTER TABLE sites ADD COLUMN display_title_override TEXT")
+    if "display_title_translation_override" not in columns:
+        conn.execute("ALTER TABLE sites ADD COLUMN display_title_translation_override TEXT")
     if "schedule_display_override" not in columns:
         conn.execute("ALTER TABLE sites ADD COLUMN schedule_display_override TEXT")
     if "contact_display_override" not in columns:
@@ -46,6 +48,8 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE sites ADD COLUMN carillonist_display_override TEXT")
     if "past_carillonist_display_override" not in columns:
         conn.execute("ALTER TABLE sites ADD COLUMN past_carillonist_display_override TEXT")
+    if "keyboard_display_override" not in columns:
+        conn.execute("ALTER TABLE sites ADD COLUMN keyboard_display_override TEXT")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS geocode_cache (

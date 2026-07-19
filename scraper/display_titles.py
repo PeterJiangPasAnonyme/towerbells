@@ -5,9 +5,22 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from scraper.location_display import build_location_display, parse_location_override
+from scraper.location_display import (
+    FORMERLY_RE,
+    build_location_display,
+    parse_location_override,
+    _is_building_rename_text,
+    _is_english_text,
+)
+from scraper.text import format_display_text, normalize_saint_spacing
 from scraper.carillonist_display import build_carillonist_display, parse_carillonist_override
 from scraper.contact_display import build_contact_display, parse_contact_override
+from scraper.keyboard_display import build_keyboard_display, parse_keyboard_override
+from scraper.links_display import build_links_display
+from scraper.former_location_display import build_former_location_display
+from scraper.prior_history_display import build_prior_history_display
+from scraper.remarks_display import build_remarks_display
+from scraper.technical_display import build_technical_display
 from scraper.past_carillonist_display import (
     build_past_carillonist_display,
     parse_past_carillonist_override,
@@ -96,13 +109,12 @@ def _primary_title_line(full_title: str) -> str:
     return _strip_coordinate_suffix(lines[0])
 
 
-def clean_display_title(
+def _prepare_title_base(
     full_title: str | None,
     *,
     short_name: str | None = None,
-    location_text: str | None = None,
 ) -> str:
-    """Return an institution-focused title without embedded address or coordinates."""
+    """Return a cleaned title string before translation split and display casing."""
     title = re.sub(r"\s+", " ", (full_title or "")).strip()
     if not title:
         return short_name or ""
@@ -122,11 +134,79 @@ def clean_display_title(
     return title
 
 
+def _title_paren_is_translation(inner: str) -> bool:
+    cleaned = inner.strip()
+    if not cleaned:
+        return False
+    if _is_building_rename_text(cleaned) or FORMERLY_RE.search(cleaned):
+        return False
+    if re.fullmatch(r"#\d+", cleaned):
+        return False
+    return _is_english_text(cleaned)
+
+
+def _split_display_title(title: str) -> tuple[str, str | None]:
+    """Split a title into primary line and optional English translation."""
+    cleaned = re.sub(r"\s+", " ", (title or "")).strip()
+    if not cleaned:
+        return "", None
+
+    match = re.match(r"^(.+?)\s*\(([^)]+)\)\s*$", cleaned)
+    if not match:
+        return cleaned, None
+
+    primary, inner = match.group(1).strip(), match.group(2).strip()
+    if _title_paren_is_translation(inner):
+        return primary, inner
+    return cleaned, None
+
+
+def _format_title_override(text: str) -> str:
+    """Preserve manual override casing; only normalize whitespace and saint spacing."""
+    cleaned = re.sub(r"\s+", " ", (text or "")).strip()
+    return normalize_saint_spacing(cleaned)
+
+
+def clean_display_title(
+    full_title: str | None,
+    *,
+    short_name: str | None = None,
+    location_text: str | None = None,
+) -> str:
+    """Return an institution-focused title without embedded address or coordinates."""
+    title, _translation = _split_display_title(
+        _prepare_title_base(full_title, short_name=short_name)
+    )
+    return format_display_text(title)
+
+
+def auto_display_title_translation_for_site(site: dict) -> str | None:
+    _title, translation = _split_display_title(
+        _prepare_title_base(site.get("full_title"), short_name=site.get("short_name"))
+    )
+    return format_display_text(translation) if translation else None
+
+
+def display_title_translation_for_site(site: dict) -> str | None:
+    translation_override = (site.get("display_title_translation_override") or "").strip()
+    if translation_override:
+        return _format_title_override(translation_override)
+
+    title_override = (site.get("display_title_override") or "").strip()
+    if title_override:
+        _line, translation = _split_display_title(title_override)
+        if translation:
+            return _format_title_override(translation)
+
+    return auto_display_title_translation_for_site(site)
+
+
 def display_title_for_site(site: dict) -> str:
     """Clean title for lists, search, and detail pages."""
     override = (site.get("display_title_override") or "").strip()
     if override:
-        return override
+        line, _translation = _split_display_title(override)
+        return _format_title_override(line or override)
     return auto_display_title_for_site(site)
 
 
@@ -139,6 +219,7 @@ def site_row_for_display(index_row: dict[str, Any], sites_row: dict[str, Any] | 
         "full_title",
         "short_name",
         "display_title_override",
+        "display_title_translation_override",
         "location_text",
         "location_display_override",
     ):
@@ -179,7 +260,8 @@ def format_site_subtitle(
     if installation_year:
         parts.append(str(installation_year))
     if bourdon_pitch:
-        parts.append(f"Bourdon {bourdon_pitch}")
+        pitch = bourdon_pitch.upper() if len(bourdon_pitch.strip()) == 1 else format_display_text(bourdon_pitch)
+        parts.append(f"Bourdon {pitch}")
 
     return " · ".join(parts)
 
@@ -217,6 +299,8 @@ def build_site_display(
     bell_count = site.get("bell_count") or index.get("bell_count")
     title = display_title_for_site(site)
     title_auto = auto_display_title_for_site(site)
+    title_translation = display_title_translation_for_site(site)
+    title_translation_auto = auto_display_title_translation_for_site(site)
     override = parse_location_override(site.get("location_display_override"))
     location = build_location_display(
         site,
@@ -231,10 +315,19 @@ def build_site_display(
     carillonist = build_carillonist_display(site, override=carillonist_override)
     past_override = parse_past_carillonist_override(site.get("past_carillonist_display_override"))
     past_carillonists = build_past_carillonist_display(site, override=past_override, get_site=get_site)
+    keyboard_override = parse_keyboard_override(site.get("keyboard_display_override"))
+    keyboard = build_keyboard_display(site, override=keyboard_override)
+    technical = build_technical_display(site, keyboard=keyboard)
+    prior_history = build_prior_history_display(site, index=index)
+    former_locations = build_former_location_display(site)
+    remarks = build_remarks_display(site)
+    links = build_links_display(site)
     badge = location.get("badge")
     return {
         "title": title,
         "title_auto": title_auto,
+        "title_translation": title_translation,
+        "title_translation_auto": title_translation_auto,
         "badge": badge,
         "subtitle": format_site_subtitle(
             country_code=site.get("country_code"),
@@ -248,4 +341,10 @@ def build_site_display(
         "contact": contact,
         "carillonist": carillonist,
         "past_carillonists": past_carillonists,
+        "keyboard": keyboard,
+        "technical": technical,
+        "prior_history": prior_history,
+        "former_locations": former_locations,
+        "remarks": remarks,
+        "links": links,
     }

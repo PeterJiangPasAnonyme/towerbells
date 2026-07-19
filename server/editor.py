@@ -7,7 +7,12 @@ from typing import Any
 
 from scraper.bellfounders import canonicalize_founder_field, join_founder_parts, split_founder_parts
 from scraper.bourdon_pitch import canonical_bourdon_pitch
-from scraper.display_titles import display_title_for_site
+from scraper.carillonist_display import build_carillonist_display
+from scraper.contact_display import build_contact_display
+from scraper.display_titles import build_site_display, display_title_for_site
+from scraper.location_display import build_location_display
+from scraper.schedule_display import build_schedule_display
+from scraper.keyboard_compact import keyboard_override_for_editor, normalize_keyboard_override_text
 from server.db import connect, get_site, row_to_dict
 from server.display_sync import sync_site_index_display
 
@@ -31,11 +36,13 @@ SITE_EDITABLE = {
     "short_name",
     "full_title",
     "display_title_override",
+    "display_title_translation_override",
     "location_text",
     "location_display_override",
     "schedule_display_override",
     "contact_display_override",
     "carillonist_display_override",
+    "keyboard_display_override",
     "latitude",
     "longitude",
 }
@@ -139,8 +146,31 @@ def get_editable_site(site_id: str) -> dict[str, Any] | None:
     finally:
         conn.close()
 
+    site = {**data["site"], **(data.get("index") or {})}
+
+    def _lookup_site(target_id: str) -> dict[str, Any] | None:
+        row = get_site(target_id)
+        return row["site"] if row else None
+
+    display = build_site_display(site, index=data.get("index"), get_site=_lookup_site)
+    auto_location = build_location_display(
+        site,
+        page_title=display_title_for_site(data["site"]),
+        override=None,
+    )
+    schedule_auto = build_schedule_display(site, override=None)
+    contact_auto = build_contact_display(site, override=None)
+    carillonist_auto = build_carillonist_display(site, override=None)
+    keyboard_editor = keyboard_override_for_editor(site, display.get("keyboard"))
+
     return {
         **data,
+        "display": display,
+        "location_auto": auto_location,
+        "schedule_auto": schedule_auto,
+        "contact_auto": contact_auto,
+        "carillonist_auto": carillonist_auto,
+        "keyboard_display_override_editor": keyboard_editor,
         "milestone_prefix": prefix,
         "related_rows": [row_to_dict(row) for row in related],
     }
@@ -200,6 +230,30 @@ def update_site_records(
             for field, value in site_fields.items()
         }
 
+        if "keyboard_display_override" in site_updates:
+            raw = site_updates["keyboard_display_override"] or ""
+            if raw:
+                row = conn.execute(
+                    """
+                    SELECT s.*, i.bell_count AS index_bell_count
+                    FROM sites s
+                    LEFT JOIN site_index i ON i.site_id = s.site_id
+                    WHERE s.site_id = ?
+                    """,
+                    (site_id,),
+                ).fetchone()
+                if not row:
+                    raise ValueError("Site not found")
+                site_ctx = row_to_dict(row)
+                if site_ctx.get("index_bell_count") is not None:
+                    site_ctx["bell_count"] = site_ctx["index_bell_count"]
+                site_updates["keyboard_display_override"] = normalize_keyboard_override_text(
+                    raw,
+                    site_ctx,
+                )
+            else:
+                site_updates["keyboard_display_override"] = None
+
         if index_updates:
             set_clause = ", ".join(f"{field} = ?" for field in index_updates)
             values = list(index_updates.values())
@@ -218,7 +272,13 @@ def update_site_records(
                     (*values, target_id),
                 )
 
-        title_related = {"display_title_override", "full_title", "short_name", "location_text"}
+        title_related = {
+            "display_title_override",
+            "display_title_translation_override",
+            "full_title",
+            "short_name",
+            "location_text",
+        }
         if site_updates and title_related.intersection(site_updates):
             for target_id in target_ids:
                 sync_site_index_display(conn, target_id)

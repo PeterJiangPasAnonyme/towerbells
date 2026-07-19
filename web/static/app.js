@@ -1,5 +1,46 @@
+const MAP_TILE_URL = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
+const MIN_MAP_WIDTH = 420;
+const MIN_MAP_VIEWPORT_RATIO = 0.52;
+const MAP_PIN_RADIUS = 5;
+const MAP_PIN_WEIGHT = 1.5;
+const MAP_PIN_FILL = "#2563eb";
+const MAP_PIN_RING = "#1d4ed8";
+const WORLD_BOUNDS = L.latLngBounds(L.latLng(-85, -180), L.latLng(85, 180));
+
+function minMapWidth() {
+  return Math.max(MIN_MAP_WIDTH, Math.round(window.innerWidth * MIN_MAP_VIEWPORT_RATIO));
+}
+
+function maxSidebarWidth() {
+  return Math.min(720, Math.max(280, window.innerWidth - minMapWidth()));
+}
+
+function updateWorldMinZoom() {
+  map.invalidateSize();
+  const size = map.getSize();
+  if (!size.x || !size.y) return;
+
+  let coverZoom = 0;
+  for (let z = 0; z <= map.getMaxZoom(); z += 1) {
+    const southWest = map.project(WORLD_BOUNDS.getSouthWest(), z);
+    const northEast = map.project(WORLD_BOUNDS.getNorthEast(), z);
+    const worldW = Math.abs(northEast.x - southWest.x);
+    const worldH = Math.abs(southWest.y - northEast.y);
+    if (worldW >= size.x && worldH >= size.y) {
+      coverZoom = z;
+      break;
+    }
+  }
+
+  map.setMinZoom(coverZoom);
+  map.setMaxBounds(WORLD_BOUNDS);
+  if (map.getZoom() < coverZoom) {
+    map.setZoom(coverZoom);
+  }
+}
+
 const map = L.map("map", { zoomControl: true }).setView([30, 0], 2);
-L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+L.tileLayer(MAP_TILE_URL, {
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; CARTO',
   subdomains: "abcd",
   maxZoom: 19,
@@ -9,6 +50,7 @@ let markersLayer = L.layerGroup().addTo(map);
 let debounceTimer = null;
 let filterOptions = {};
 let activeSiteId = null;
+let restoreSavedMapViewOnce = false;
 
 const els = {
   search: document.getElementById("searchInput"),
@@ -123,7 +165,7 @@ const DENOMINATION_INSTITUTION_TYPES = new Set([
   "Educational Institutions",
 ]);
 
-const FILTER_STORAGE_KEY = "towerbellsFilters";
+const FILTER_STORAGE_KEY = window.TowerbellsFilters?.FILTER_STORAGE_KEY || "towerbellsFilters";
 const DEFAULT_YEAR_EVENT_TYPES = ["installed"];
 
 const YEAR_SCALE = {
@@ -132,6 +174,8 @@ const YEAR_SCALE = {
   steps: 1000,
   defaultMinYear: 1900,
 };
+
+let pendingLocationRestore = null;
 
 let yearScaleBounds = { min: 1500, max: 2025 };
 
@@ -346,39 +390,79 @@ function getParams() {
   return params;
 }
 
-function getSavedFilterParams() {
-  if (window.location.search.length > 1) {
-    return window.location.search.slice(1);
+function setSelectValue(select, value) {
+  if (!value) {
+    select.value = "";
+    return false;
   }
-  return sessionStorage.getItem(FILTER_STORAGE_KEY) || "";
+  if (![...select.options].some((option) => option.value === value)) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value;
+    select.appendChild(option);
+  }
+  select.value = value;
+  return select.value === value;
+}
+
+function getSavedFilterParams() {
+  const query =
+    window.TowerbellsFilters?.getSavedFilterQuery?.() ||
+    (window.location.search.length > 1 ? window.location.search.slice(1) : "") ||
+    sessionStorage.getItem(FILTER_STORAGE_KEY) ||
+    "";
+  if (query && window.location.pathname === "/" && window.location.search.length <= 1) {
+    history.replaceState(null, "", `/?${query}`);
+  }
+  return query;
 }
 
 function saveFilterState() {
   const params = getParams().toString();
-  if (params) {
+  if (window.TowerbellsFilters?.saveFilterQuery) {
+    window.TowerbellsFilters.saveFilterQuery(params);
+  } else if (params) {
     sessionStorage.setItem(FILTER_STORAGE_KEY, params);
-    history.replaceState(null, "", `/?${params}`);
   } else {
     sessionStorage.removeItem(FILTER_STORAGE_KEY);
-    history.replaceState(null, "", "/");
+  }
+  if (window.location.pathname === "/") {
+    history.replaceState(null, "", params ? `/?${params}` : "/");
   }
 }
 
-function applyFilterParams(paramString) {
-  if (!paramString) return false;
-  const params = new URLSearchParams(paramString);
+function saveMapState() {
+  if (window.location.pathname !== "/") {
+    return;
+  }
+  const center = map.getCenter();
+  if (window.TowerbellsFilters?.saveMapView) {
+    window.TowerbellsFilters.saveMapView({
+      lat: center.lat,
+      lng: center.lng,
+      zoom: map.getZoom(),
+    });
+  }
+}
+
+function saveBrowseState() {
+  saveFilterState();
+  saveMapState();
+}
+
+function restoreSavedMapView() {
+  const view = window.TowerbellsFilters?.getSavedMapView?.();
+  if (!view || view.lat == null || view.lng == null || view.zoom == null) {
+    return false;
+  }
+  map.setView([view.lat, view.lng], view.zoom, { animate: false });
+  return true;
+}
+
+function applyCoreFilterParams(params) {
+  if (!params) return false;
 
   els.search.value = params.get("q") || "";
-  els.continent.value = params.get("continent") || "";
-  els.country.value = params.get("country") || "";
-  els.state.value = params.get("state") || "";
-  if (params.get("year_min")) els.yearMin.value = params.get("year_min");
-  if (params.get("year_max")) els.yearMax.value = params.get("year_max");
-  if (params.get("year_event_types")) {
-    setYearEventTypes(params.get("year_event_types").split(","));
-  } else {
-    setYearEventTypes(DEFAULT_YEAR_EVENT_TYPES);
-  }
   els.instrumentType.value = params.get("instrument_type") || "";
   els.bourdonPitch.value = params.get("bourdon_pitch") || "";
   els.transposition.value = params.get("transposition") || "";
@@ -386,9 +470,53 @@ function applyFilterParams(paramString) {
   els.bellfounder.value = params.get("bellfounder") || "";
   els.denomination.value = params.get("denomination") || "";
   els.institutionType.value = params.get("institution_type") || "";
+  if (params.get("year_min")) els.yearMin.value = params.get("year_min");
+  if (params.get("year_max")) els.yearMax.value = params.get("year_max");
+  if (params.get("year_event_types")) {
+    setYearEventTypes(params.get("year_event_types").split(","));
+  } else {
+    setYearEventTypes(DEFAULT_YEAR_EVENT_TYPES);
+  }
   syncYearFromInputs();
-  updateDenominationFieldVisibility();
+
+  pendingLocationRestore = {
+    continent: params.get("continent") || "",
+    country: params.get("country") || "",
+    state: params.get("state") || "",
+  };
   return true;
+}
+
+async function restorePendingLocationFilters() {
+  if (!pendingLocationRestore) return;
+
+  const { continent, country, state } = pendingLocationRestore;
+  pendingLocationRestore = null;
+  if (!continent && !country && !state) {
+    return;
+  }
+
+  await refreshLocationFacets();
+  if (continent) {
+    setSelectValue(els.continent, continent);
+  }
+
+  await refreshLocationFacets();
+  if (country) {
+    setSelectValue(els.country, country);
+  }
+
+  await refreshLocationFacets();
+  if (state) {
+    setSelectValue(els.state, state);
+  }
+
+  updateStateFieldVisibility();
+}
+
+function applyFilterParams(paramString) {
+  if (!paramString) return false;
+  return applyCoreFilterParams(new URLSearchParams(paramString));
 }
 
 function renderResults(data) {
@@ -413,11 +541,11 @@ function renderResults(data) {
 
     if (site.latitude != null && site.longitude != null) {
       const marker = L.circleMarker([site.latitude, site.longitude], {
-        radius: 7,
-        color: "#c9a227",
-        fillColor: "#e05a5a",
-        fillOpacity: 0.85,
-        weight: 2,
+        radius: MAP_PIN_RADIUS,
+        color: MAP_PIN_RING,
+        fillColor: MAP_PIN_FILL,
+        fillOpacity: 0.9,
+        weight: MAP_PIN_WEIGHT,
       });
       marker.siteId = site.site_id;
       marker.bindPopup(`
@@ -428,7 +556,7 @@ function renderResults(data) {
       marker.on("click", () => {
         activeSiteId = site.site_id;
         highlightListItem(site.site_id);
-        saveFilterState();
+        saveBrowseState();
         window.location.href = `/carillon/${site.site_id}`;
       });
       markersLayer.addLayer(marker);
@@ -436,9 +564,18 @@ function renderResults(data) {
     }
   }
 
+  if (restoreSavedMapViewOnce) {
+    restoreSavedMapViewOnce = false;
+    if (restoreSavedMapView()) {
+      updateWorldMinZoom();
+      return;
+    }
+  }
+
   if (bounds.length) {
     map.fitBounds(bounds, { padding: [40, 40], maxZoom: 12 });
   }
+  updateWorldMinZoom();
 }
 
 function formatMeta(site) {
@@ -707,7 +844,7 @@ function clamp(value, min, max) {
 function setSidebarWidth(px) {
   root.style.setProperty("--sidebar-width", `${px}px`);
   localStorage.setItem("sidebarWidth", String(px));
-  map.invalidateSize();
+  updateWorldMinZoom();
 }
 
 function setFiltersHeight(px) {
@@ -718,7 +855,7 @@ function setFiltersHeight(px) {
 function initPanelSizes() {
   const storedWidth = Number(localStorage.getItem("sidebarWidth"));
   if (storedWidth) {
-    setSidebarWidth(clamp(storedWidth, 280, Math.min(720, window.innerWidth * 0.7)));
+    setSidebarWidth(clamp(storedWidth, 280, maxSidebarWidth()));
   }
 
   const storedHeight = Number(localStorage.getItem("filtersHeight"));
@@ -739,7 +876,7 @@ function startDrag(handle, axis, onMove) {
     document.body.classList.remove("resizing-col", "resizing-row");
     window.removeEventListener("mousemove", move);
     window.removeEventListener("mouseup", stop);
-    if (axis === "x") map.invalidateSize();
+    if (axis === "x") updateWorldMinZoom();
   };
 
   window.addEventListener("mousemove", move);
@@ -755,7 +892,7 @@ sidebarResize?.addEventListener("mousedown", (event) => {
     const nextWidth = clamp(
       startWidth + (moveEvent.clientX - startX),
       280,
-      Math.min(720, window.innerWidth * 0.7)
+      maxSidebarWidth()
     );
     setSidebarWidth(nextWidth);
   });
@@ -777,17 +914,22 @@ filtersResize?.addEventListener("mousedown", (event) => {
 window.addEventListener("resize", () => {
   const width = Number(localStorage.getItem("sidebarWidth"));
   if (width) {
-    setSidebarWidth(clamp(width, 280, Math.min(720, window.innerWidth * 0.7)));
+    setSidebarWidth(clamp(width, 280, maxSidebarWidth()));
   }
   const height = Number(localStorage.getItem("filtersHeight"));
   if (height && sidebarTop) {
     const maxHeight = sidebarTop.closest(".sidebar").clientHeight - 140;
     setFiltersHeight(clamp(height, 180, maxHeight));
   }
+  updateWorldMinZoom();
 });
 
 initPanelSizes();
 initRangeClassInfo();
+
+window.addEventListener("load", () => {
+  updateWorldMinZoom();
+});
 
 loadFilters().then(async () => {
   const restored = applyFilterParams(getSavedFilterParams());
@@ -800,12 +942,15 @@ loadFilters().then(async () => {
       els.instrumentType.value = typeof trad === "string" ? trad : trad.value;
     }
   }
-  updateStateFieldVisibility();
+  await restorePendingLocationFilters();
   updateDenominationFieldVisibility();
+  restoreSavedMapViewOnce = Boolean(window.TowerbellsFilters?.getSavedMapView?.());
   await runSearch();
 });
 
+window.addEventListener("pagehide", saveBrowseState);
+
 document.addEventListener("click", (event) => {
-  const link = event.target.closest('a[href^="/carillon/"]');
-  if (link) saveFilterState();
+  const link = event.target.closest('a[href^="/carillon/"], a[href^="/admin"]');
+  if (link) saveBrowseState();
 });

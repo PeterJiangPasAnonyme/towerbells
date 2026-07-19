@@ -1,5 +1,4 @@
 const siteId = window.location.pathname.split("/").pop();
-const FILTER_STORAGE_KEY = "towerbellsFilters";
 
 const backLink = document.querySelector(".back-link");
 const editLink = document.getElementById("editLink");
@@ -10,8 +9,10 @@ const mapFullscreen = document.getElementById("mapFullscreen");
 if (editLink) {
   editLink.href = `/admin?site=${encodeURIComponent(siteId)}`;
 }
-if (backLink) {
-  const saved = sessionStorage.getItem(FILTER_STORAGE_KEY);
+if (window.TowerbellsFilters?.wireBackToMapLink) {
+  window.TowerbellsFilters.wireBackToMapLink(".back-link");
+} else if (backLink) {
+  const saved = sessionStorage.getItem("towerbellsFilters");
   backLink.href = saved ? `/?${saved}` : "/";
 }
 
@@ -22,6 +23,650 @@ let mapCoords = null;
 function section(title, text) {
   if (!text || !text.trim()) return "";
   return `<section><h2>${title}</h2><pre>${escapeHtml(text.trim())}</pre></section>`;
+}
+
+function renderRemarksPanel(remarks) {
+  if (!remarks?.has_content || !remarks.paragraphs?.length) return "";
+  const body = remarks.paragraphs.map((paragraph) => `<p>${escapeHtml(paragraph)}</p>`).join("");
+  return `<section class="remarks-panel"><h2>Remarks</h2>${body}</section>`;
+}
+
+function renderLinksPanel(links) {
+  if (!links?.has_content || !links.paragraphs?.length) return "";
+  const body = links.paragraphs
+    .map((paragraph) => `<p class="links-paragraph">${paragraph.html || ""}</p>`)
+    .join("");
+  return `<section class="links-panel"><h2>Links</h2>${body}</section>`;
+}
+
+function isMiddleC(key) {
+  return Boolean(key && !key.gap && key.midi === 60 && key.keyboard === "C");
+}
+
+function midiOctave(midi) {
+  return Math.floor(midi / 12) - 1;
+}
+
+function formatNoteWithOctave(pitchName, midi) {
+  if (!pitchName || midi == null) return null;
+  return `${pitchName}${midiOctave(midi)}`;
+}
+
+function keyNoteLabels(key, transpositionSemitones) {
+  if (key.midi == null || !key.keyboard) return null;
+  const keyboardNote = formatNoteWithOctave(key.keyboard, key.midi);
+  if (!keyboardNote) return null;
+  if (key.gap) return { keyboardNote };
+  const shift = transpositionSemitones ?? 0;
+  const playedPitch = key.concert || key.keyboard;
+  const playedNote = formatNoteWithOctave(playedPitch, key.midi + shift);
+  return { keyboardNote, playedNote: playedNote || keyboardNote };
+}
+
+function keyTooltipDataAttrs(key, transpositionSemitones) {
+  const labels = keyNoteLabels(key, transpositionSemitones);
+  if (!labels) return "";
+  if (key.gap) {
+    return ` data-missing-note="${escapeHtml(labels.keyboardNote)}"`;
+  }
+  return ` data-keyboard-note="${escapeHtml(labels.keyboardNote)}" data-played-note="${escapeHtml(labels.playedNote)}"`;
+}
+
+let keyboardFloatingTooltip = null;
+let activeKeyboardKey = null;
+
+function getKeyboardFloatingTooltip() {
+  if (!keyboardFloatingTooltip) {
+    keyboardFloatingTooltip = document.createElement("div");
+    keyboardFloatingTooltip.className = "keyboard-key-tooltip keyboard-key-tooltip--floating";
+    keyboardFloatingTooltip.setAttribute("role", "tooltip");
+    keyboardFloatingTooltip.hidden = true;
+    document.body.appendChild(keyboardFloatingTooltip);
+  }
+  return keyboardFloatingTooltip;
+}
+
+function hideKeyboardFloatingTooltip() {
+  if (!keyboardFloatingTooltip) return;
+  keyboardFloatingTooltip.hidden = true;
+  keyboardFloatingTooltip.classList.remove("keyboard-key-tooltip--shown");
+  activeKeyboardKey = null;
+}
+
+function positionKeyboardFloatingTooltip(keyEl, tooltip) {
+  const missingNote = keyEl.dataset.missingNote;
+  if (missingNote) {
+    tooltip.innerHTML = `<span class="keyboard-key-tooltip-line">Missing Note: ${escapeHtml(
+      missingNote
+    )}</span>`;
+  } else {
+    const keyboardNote = keyEl.dataset.keyboardNote;
+    const playedNote = keyEl.dataset.playedNote;
+    if (!keyboardNote || !playedNote) return;
+
+    tooltip.innerHTML = `<span class="keyboard-key-tooltip-line">Keyboard Note: ${escapeHtml(
+      keyboardNote
+    )}</span><span class="keyboard-key-tooltip-line">Played Note: ${escapeHtml(playedNote)}</span>`;
+  }
+  tooltip.hidden = false;
+  tooltip.classList.add("keyboard-key-tooltip--shown");
+
+  tooltip.style.left = "-9999px";
+  tooltip.style.top = "0px";
+
+  const keyRect = keyEl.getBoundingClientRect();
+  const tipRect = tooltip.getBoundingClientRect();
+  const isHands = Boolean(keyEl.closest(".keyboard-section--hands"));
+  const margin = 8;
+  const gap = 6;
+
+  let left = keyRect.left + keyRect.width / 2 - tipRect.width / 2;
+  left = Math.max(margin, Math.min(left, window.innerWidth - tipRect.width - margin));
+
+  let top = isHands ? keyRect.top - tipRect.height - gap : keyRect.bottom + gap;
+  top = Math.max(margin, Math.min(top, window.innerHeight - tipRect.height - margin));
+
+  tooltip.style.left = `${left}px`;
+  tooltip.style.top = `${top}px`;
+}
+
+function showKeyboardFloatingTooltip(keyEl) {
+  if (!keyEl.dataset.keyboardNote && !keyEl.dataset.missingNote) return;
+  activeKeyboardKey = keyEl;
+  positionKeyboardFloatingTooltip(keyEl, getKeyboardFloatingTooltip());
+}
+
+function bindKeyboardTooltips(root) {
+  if (root.dataset.tooltipsBound === "1") return;
+  root.dataset.tooltipsBound = "1";
+
+  const reposition = () => {
+    if (!activeKeyboardKey) return;
+    positionKeyboardFloatingTooltip(activeKeyboardKey, getKeyboardFloatingTooltip());
+  };
+
+  root.addEventListener("mouseover", (event) => {
+    const key = event.target.closest(".keyboard-key");
+    if (!key || !root.contains(key)) return;
+    if (activeKeyboardKey === key) return;
+    showKeyboardFloatingTooltip(key);
+  });
+
+  root.addEventListener("mouseout", (event) => {
+    const key = event.target.closest(".keyboard-key");
+    if (!key || activeKeyboardKey !== key) return;
+    const to = event.relatedTarget;
+    if (to && key.contains(to)) return;
+    hideKeyboardFloatingTooltip();
+  });
+
+  root.querySelectorAll(".keyboard-scroll-inner").forEach((el) => {
+    el.addEventListener("scroll", reposition, { passive: true });
+  });
+  window.addEventListener("resize", reposition, { passive: true });
+  window.addEventListener("scroll", reposition, { passive: true });
+}
+
+function annotateKeyMidis(keys) {
+  let prevMidi = null;
+  return keys.map((key) => {
+    if (key.midi != null) {
+      if (!key.gap && !key.empty) {
+        prevMidi = key.midi;
+      }
+      return key;
+    }
+    const midi = prevMidi != null ? prevMidi + 1 : null;
+    if (midi != null) prevMidi = midi;
+    return { ...key, midi };
+  });
+}
+
+function keyboardLayoutMetrics(variant) {
+  if (variant === "pedals") {
+    return { tubeW: 0.75, gap: 1, sharpW: 0.75 };
+  }
+  return { tubeW: 0.8, gap: 0.4, sharpW: 0.67 };
+}
+
+function overlayPos(afterNatural) {
+  return Math.max(afterNatural + 1, 0);
+}
+
+function slotBounds(slot, layout) {
+  const step = layout.tubeW + layout.gap;
+  if (slot.type === "natural" || (slot.type === "gap" && slot.naturalIdx != null)) {
+    const left = slot.naturalIdx * step;
+    return { left, right: left + layout.tubeW };
+  }
+  const pos = overlayPos(slot.afterNatural);
+  const center = pos * step - layout.gap / 2;
+  return { left: center - layout.tubeW / 2, right: center + layout.tubeW / 2 };
+}
+
+function computeLeadingOffset(slots, layout) {
+  let minLeft = 0;
+  for (const slot of slots) {
+    const { left } = slotBounds(slot, layout);
+    minLeft = Math.min(minLeft, left);
+  }
+  const inset = 0.08;
+  return minLeft < 0 ? -minLeft + inset : 0;
+}
+
+function buildKeyboardSlots(keys) {
+  const slots = [];
+  let naturalIdx = -1;
+  for (const key of keys) {
+    if (key.gap && !key.is_sharp) {
+      naturalIdx += 1;
+      slots.push({ key, type: "gap", naturalIdx });
+    } else if (!key.gap && !key.is_sharp) {
+      naturalIdx += 1;
+      slots.push({ key, type: "natural", naturalIdx });
+    } else {
+      slots.push({
+        key,
+        type: key.gap ? "gap" : "sharp",
+        afterNatural: naturalIdx,
+      });
+    }
+  }
+  return slots;
+}
+
+function buildOctaveMarkers(keys, variant) {
+  const layout = keyboardLayoutMetrics(variant);
+  const annotated = annotateKeyMidis(keys);
+  const slots = buildKeyboardSlots(annotated);
+  const leadingOffset = computeLeadingOffset(slots, layout);
+
+  const placed = slots.map((slot) => ({
+    slot,
+    bounds: slotBounds(slot, layout),
+    key: slot.key,
+  }));
+
+  const active = placed.filter(({ key }) => key.midi != null && !key.gap);
+  const cSlots = active.filter(({ key }) => key.keyboard === "C");
+  let octaves = [];
+  const cLabels = [];
+
+  if (!active.length) {
+    return { octaves, cLabels, leadingOffset };
+  }
+
+  let preCBracket = null;
+  const firstC = cSlots[0];
+  if (firstC) {
+    const beforeC = active.filter(({ bounds }) => bounds.right <= firstC.bounds.left + 0.001);
+    if (beforeC.length) {
+      const oct = midiOctave(beforeC[0].key.midi);
+      const left = Math.min(...beforeC.map(({ bounds }) => bounds.left));
+      if (oct === midiOctave(firstC.key.midi)) {
+        preCBracket = { oct, left };
+      } else {
+        octaves.push([
+          oct,
+          {
+            left,
+            right: firstC.bounds.left - layout.gap,
+            keyCount: beforeC.length,
+          },
+        ]);
+      }
+    }
+  }
+
+  for (let i = 0; i < cSlots.length; i += 1) {
+    const cSlot = cSlots[i];
+    const oct = midiOctave(cSlot.key.midi);
+    const nextC = cSlots[i + 1];
+    const group = active.filter(({ key, bounds }) => {
+      if (midiOctave(key.midi) !== oct) return false;
+      if (bounds.left < cSlot.bounds.left - 0.001) return false;
+      if (nextC && bounds.left >= nextC.bounds.left) return false;
+      return true;
+    });
+    if (!group.length) continue;
+
+    let left = Math.min(...group.map(({ bounds }) => bounds.left));
+    const right = Math.max(...group.map(({ bounds }) => bounds.right));
+    if (preCBracket && preCBracket.oct === oct && cSlot === firstC) {
+      left = preCBracket.left;
+      preCBracket = null;
+    }
+
+    octaves.push([oct, { left, right, keyCount: group.length }]);
+
+    cLabels.push({
+      label: `C${oct}`,
+      left: cSlot.bounds.left + layout.tubeW / 2,
+      middle: cSlot.key.midi === 60,
+    });
+  }
+
+  const bracketedOcts = new Set(octaves.map(([oct]) => oct));
+  const leftovers = new Map();
+  for (const item of active) {
+    const oct = midiOctave(item.key.midi);
+    if (bracketedOcts.has(oct)) continue;
+    if (!leftovers.has(oct)) leftovers.set(oct, []);
+    leftovers.get(oct).push(item);
+  }
+  for (const [oct, group] of [...leftovers.entries()].sort((a, b) => a[0] - b[0])) {
+    octaves.push([
+      oct,
+      {
+        left: Math.min(...group.map(({ bounds }) => bounds.left)),
+        right: Math.max(...group.map(({ bounds }) => bounds.right)),
+        keyCount: group.length,
+      },
+    ]);
+  }
+
+  octaves.sort((a, b) => a[0] - b[0]);
+  octaves = collapseLonerOctaves(octaves, active);
+
+  return { octaves, cLabels, leadingOffset };
+}
+
+function collapseLonerOctaves(octaves, active) {
+  if (octaves.length < 2) return octaves;
+
+  const collapsed = [];
+  for (const [oct, bounds] of octaves) {
+    const isLoneC =
+      bounds.keyCount === 1 &&
+      active.some(
+        ({ key, bounds: keyBounds }) =>
+          key.keyboard === "C" &&
+          midiOctave(key.midi) === oct &&
+          Math.abs(keyBounds.left - bounds.left) < 0.001 &&
+          Math.abs(keyBounds.right - bounds.right) < 0.001
+      );
+
+    if (isLoneC && collapsed.length) {
+      const prev = collapsed[collapsed.length - 1];
+      prev[1].right = Math.max(prev[1].right, bounds.right);
+      continue;
+    }
+
+    collapsed.push([oct, { left: bounds.left, right: bounds.right, keyCount: bounds.keyCount }]);
+  }
+
+  return collapsed;
+}
+
+function renderOctaveMap(keys, variant, leadingOffset = 0) {
+  const { octaves, cLabels } = buildOctaveMarkers(keys, variant);
+  if (!octaves.length) return "";
+
+  const brackets = octaves
+    .map(([oct, bounds]) => {
+      const width = bounds.right - bounds.left;
+      const left = bounds.left + leadingOffset;
+      return `<div class="keyboard-octave" style="left:${left}rem;width:${width}rem">
+        <div class="keyboard-octave-bracket" aria-hidden="true">
+          <span class="keyboard-octave-tick keyboard-octave-tick--left"></span>
+          <span class="keyboard-octave-bar"></span>
+          <span class="keyboard-octave-tick keyboard-octave-tick--right"></span>
+        </div>
+        <span class="keyboard-octave-number">${oct}</span>
+      </div>`;
+    })
+    .join("");
+
+  const cMarks = cLabels
+    .map(({ label, left, middle }) => {
+      const middleClass = middle ? " keyboard-c-label--middle-c" : "";
+      return `<span class="keyboard-c-label${middleClass}" style="left:${left + leadingOffset}rem">${escapeHtml(label)}</span>`;
+    })
+    .join("");
+
+  return `<div class="keyboard-octave-map">${cMarks}${brackets}</div>`;
+}
+
+function renderNaturalKey(key, isPedal, transpositionSemitones) {
+  const middleClass = isMiddleC(key) ? " keyboard-key--middle-c" : "";
+  const tipAttrs = keyTooltipDataAttrs(key, transpositionSemitones);
+  if (isPedal) {
+    return `<div class="keyboard-key keyboard-key--natural${middleClass}"${tipAttrs}>
+      <div class="keyboard-pedal keyboard-pedal--natural" aria-hidden="true">
+        <span class="keyboard-pedal-stem"></span>
+      </div>
+    </div>`;
+  }
+  return `<div class="keyboard-key keyboard-key--natural${middleClass}"${tipAttrs}>
+    <div class="keyboard-baton keyboard-baton--natural" aria-hidden="true">
+      <span class="keyboard-baton-cap"></span>
+      <span class="keyboard-baton-stem"></span>
+    </div>
+  </div>`;
+}
+
+function renderNaturalGapKey(key, isPedal, transpositionSemitones) {
+  const labels = keyNoteLabels(key, transpositionSemitones);
+  const ariaLabel = labels ? `Missing ${labels.keyboardNote}` : "Missing key";
+  const tipAttrs = keyTooltipDataAttrs(key, transpositionSemitones);
+  if (isPedal) {
+    return `<div class="keyboard-key keyboard-key--gap" aria-label="${escapeHtml(ariaLabel)}"${tipAttrs}>
+      <div class="keyboard-pedal keyboard-pedal--natural keyboard-pedal--gap" aria-hidden="true">
+        <span class="keyboard-pedal-stem"></span>
+      </div>
+    </div>`;
+  }
+  return `<div class="keyboard-key keyboard-key--gap" aria-label="${escapeHtml(ariaLabel)}"${tipAttrs}>
+    <div class="keyboard-baton keyboard-baton--natural keyboard-baton--gap" aria-hidden="true">
+      <span class="keyboard-baton-cap"></span>
+      <span class="keyboard-baton-stem"></span>
+    </div>
+  </div>`;
+}
+
+function renderOverlayKey(key, isPedal, transpositionSemitones) {
+  const labels = keyNoteLabels(key, transpositionSemitones);
+  const ariaLabel = labels ? `Missing ${labels.keyboardNote}` : "Missing key";
+  const tipAttrs = keyTooltipDataAttrs(key, transpositionSemitones);
+  if (key.gap) {
+    if (isPedal) {
+      return `<div class="keyboard-key keyboard-key--gap" aria-label="${escapeHtml(ariaLabel)}"${tipAttrs}>
+        <div class="keyboard-pedal keyboard-pedal--sharp keyboard-pedal--gap" aria-hidden="true">
+          <span class="keyboard-pedal-stem"></span>
+        </div>
+      </div>`;
+    }
+    return `<div class="keyboard-key keyboard-key--gap" aria-label="${escapeHtml(ariaLabel)}"${tipAttrs}>
+      <div class="keyboard-baton keyboard-baton--sharp keyboard-baton--gap" aria-hidden="true">
+        <span class="keyboard-baton-cap"></span>
+        <span class="keyboard-baton-stem"></span>
+      </div>
+    </div>`;
+  }
+  if (isPedal) {
+    return `<div class="keyboard-key keyboard-key--sharp"${tipAttrs}>
+      <div class="keyboard-pedal keyboard-pedal--sharp" aria-hidden="true">
+        <span class="keyboard-pedal-stem"></span>
+      </div>
+    </div>`;
+  }
+  return `<div class="keyboard-key keyboard-key--sharp"${tipAttrs}>
+    <div class="keyboard-baton keyboard-baton--sharp" aria-hidden="true">
+      <span class="keyboard-baton-cap"></span>
+      <span class="keyboard-baton-stem"></span>
+    </div>
+  </div>`;
+}
+
+function renderKeyboardKeys(keys, variant, transpositionSemitones) {
+  if (!Array.isArray(keys) || !keys.length) return "";
+  const isPedal = variant === "pedals";
+  const annotated = annotateKeyMidis(keys);
+
+  const naturals = [];
+  const overlays = [];
+  let naturalIdx = -1;
+
+  for (const key of annotated) {
+    if (key.gap && !key.is_sharp) {
+      naturalIdx += 1;
+      naturals.push({ key, isGap: true });
+    } else if (!key.gap && !key.is_sharp) {
+      naturalIdx += 1;
+      naturals.push({ key, isGap: false });
+    } else {
+      overlays.push({ key, afterNatural: naturalIdx });
+    }
+  }
+
+  const slots = buildKeyboardSlots(annotated);
+  const layout = keyboardLayoutMetrics(variant);
+  const leadingOffset = computeLeadingOffset(slots, layout);
+
+  const naturalCols = naturals
+    .map(({ key, isGap }) => {
+      const inner = isGap
+        ? renderNaturalGapKey(key, isPedal, transpositionSemitones)
+        : renderNaturalKey(key, isPedal, transpositionSemitones);
+      return `<div class="keyboard-col">${inner}</div>`;
+    })
+    .join("");
+
+  const overlayItems = overlays
+    .map(({ key, afterNatural }) => {
+      const pos = overlayPos(afterNatural);
+      return `<div class="keyboard-overlay" style="--key-pos:${pos}">${renderOverlayKey(
+        key,
+        isPedal,
+        transpositionSemitones
+      )}</div>`;
+    })
+    .join("");
+
+  return `<div class="keyboard-keys keyboard-keys--${variant}" style="--key-leading-offset:${leadingOffset}rem">
+    <div class="keyboard-piano">
+      <div class="keyboard-naturals">${naturalCols}</div>
+      <div class="keyboard-overlays">${overlayItems}</div>
+    </div>
+    ${renderOctaveMap(annotated, variant, leadingOffset)}
+  </div>`;
+}
+
+function renderKeyboardSection(sectionData, title, variant, transpositionSemitones) {
+  if (!sectionData?.keys?.length) return "";
+
+  return `<div class="keyboard-section keyboard-section--${variant}">
+    <div class="keyboard-section-head">
+      <h3 class="keyboard-section-title">${escapeHtml(title)}</h3>
+    </div>
+    <div class="keyboard-scroll">
+      <div class="keyboard-scroll-inner">${renderKeyboardKeys(
+        sectionData.keys,
+        variant,
+        transpositionSemitones
+      )}</div>
+    </div>
+  </div>`;
+}
+
+function renderSpecSubitems(subitems) {
+  return subitems
+    .map((sub) => {
+      if (sub.subitems?.length) {
+        const nested = renderSpecSubitems(sub.subitems);
+        return `<li class="technical-spec-subitem technical-spec-subitem--group">
+          <span class="technical-spec-label">${escapeHtml(sub.label)}:</span>
+          <ul class="technical-spec-sublist">${nested}</ul>
+        </li>`;
+      }
+      return `<li class="technical-spec-subitem"><span class="technical-spec-label">${escapeHtml(
+        sub.label
+      )}:</span> ${escapeHtml(sub.value)}</li>`;
+    })
+    .join("");
+}
+
+function renderTechnicalSpecList(technical) {
+  if (!technical?.items?.length) return "";
+
+  const rows = technical.items
+    .map((item) => {
+      if (item.subitems?.length) {
+        const nested = renderSpecSubitems(item.subitems);
+        return `<li class="technical-spec-item technical-spec-item--group">
+          <span class="technical-spec-label">${escapeHtml(item.label)}:</span>
+          <ul class="technical-spec-sublist">${nested}</ul>
+        </li>`;
+      }
+      return `<li class="technical-spec-item">
+        <span class="technical-spec-label">${escapeHtml(item.label)}:</span>
+        ${escapeHtml(item.value)}
+      </li>`;
+    })
+    .join("");
+
+  let html = `<ul class="technical-spec-list">${rows}</ul>`;
+  if (technical.tech_info_year) {
+    html += `<p class="technical-spec-footnote">Year of latest technical information: ${escapeHtml(
+      technical.tech_info_year
+    )}</p>`;
+  }
+  return html;
+}
+
+function renderKeyboardDiagram(keyboard, { compact = false } = {}) {
+  if (!keyboard?.has_content || keyboard?.hide_diagram) return "";
+  if (keyboard.mode !== "structured") return "";
+
+  const parts = [`<div class="keyboard-display${compact ? " keyboard-display--compact" : ""}">`];
+  parts.push('<div class="keyboard-display-head">');
+  if (keyboard.keyboard_range_raw) {
+    parts.push(`<p class="keyboard-range-raw">${escapeHtml(keyboard.keyboard_range_raw)}</p>`);
+  }
+  if (keyboard.transposition_badge != null && keyboard.transposition_badge !== "") {
+    parts.push(
+      `<span class="keyboard-transposition-badge">Transposition: ${escapeHtml(
+        keyboard.transposition_badge
+      )}</span>`
+    );
+  }
+  parts.push("</div>");
+
+  const transpositionSemitones = keyboard.transposition_semitones ?? null;
+  parts.push(renderKeyboardSection(keyboard.hands, "Batons", "hands", transpositionSemitones));
+  parts.push(renderKeyboardSection(keyboard.pedals, "Pedals", "pedals", transpositionSemitones));
+
+  parts.push("</div>");
+  return parts.join("");
+}
+
+function renderTimelineEvents(events) {
+  return (events || [])
+    .map((event) => {
+      const bullets = (event.bullets || [])
+        .map((item) => `<li>${escapeHtml(item)}</li>`)
+        .join("");
+      const keyboardBullets = (event.keyboard_bullets || [])
+        .map((item) => `<li>${escapeHtml(item)}</li>`)
+        .join("");
+      const bulletList =
+        bullets || keyboardBullets
+          ? `<ul class="prior-history-bullets">${bullets}${keyboardBullets}</ul>`
+          : "";
+      const keyboard = event.keyboard ? renderKeyboardDiagram(event.keyboard, { compact: true }) : "";
+
+      return `<article class="prior-history-event">
+        <div class="prior-history-marker" aria-hidden="true"><span class="prior-history-dot"></span></div>
+        <div class="prior-history-content">
+          <div class="prior-history-event-year">${escapeHtml(String(event.year))}</div>
+          <p class="prior-history-event-headline">${escapeHtml(event.headline || "")}</p>
+          ${bulletList}
+          ${keyboard}
+        </div>
+      </article>`;
+    })
+    .join("");
+}
+
+function renderTimelinePanel(title, timeline) {
+  if (!timeline?.has_content || !timeline.events?.length) return "";
+
+  return `<section class="prior-history-display"><h2>${escapeHtml(title)}</h2><div class="prior-history-timeline">${renderTimelineEvents(
+    timeline.events
+  )}</div></section>`;
+}
+
+function renderPriorHistoryPanel(priorHistory) {
+  return renderTimelinePanel("Prior history", priorHistory);
+}
+
+function renderFormerLocationsPanel(formerLocations) {
+  return renderTimelinePanel("Former locations", formerLocations);
+}
+
+function renderTechnicalPanel(site, keyboard, technical) {
+  const showDiagram = Boolean(keyboard?.has_content && !keyboard?.hide_diagram);
+  const hasSpec = Boolean(technical?.items?.length);
+  const hasProse = Boolean(keyboard?.prose?.trim());
+
+  if (!showDiagram && !hasSpec && !hasProse && !technical?.has_content) return "";
+
+  const parts = ['<section class="technical-display"><h2>Technical data</h2>'];
+
+  if (showDiagram) {
+    parts.push(renderKeyboardDiagram(keyboard));
+  }
+
+  if (hasSpec) {
+    parts.push(renderTechnicalSpecList(technical));
+  }
+
+  if (hasProse) {
+    parts.push(`<pre class="keyboard-prose">${escapeHtml(keyboard.prose.trim())}</pre>`);
+  }
+
+  parts.push("</section>");
+  return parts.join("");
 }
 
 function escapeHtml(str) {
@@ -37,33 +682,61 @@ function renderLocationPanel(location, pageBadge) {
   }
 
   const parts = ['<section class="location-display"><h2>Location</h2>'];
+  const building = location.building || {};
+  const buildingLine =
+    building.line ||
+    location.name ||
+    null;
+  const buildingTranslation =
+    building.translation ||
+    (Array.isArray(location.also_known_as) ? location.also_known_as[0] : null) ||
+    null;
+  let cityRegion = location.city_region || null;
+  let country = location.country || null;
+  if (!cityRegion && location.locality) {
+    const localityParts = String(location.locality)
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean);
+    if (localityParts.length >= 2) {
+      country = country || localityParts[localityParts.length - 1];
+      cityRegion = localityParts.slice(0, -1).join(", ");
+    } else {
+      cityRegion = location.locality;
+    }
+  }
 
-  const hideName =
+  const hideBuilding =
     pageBadge &&
-    location.name &&
+    buildingLine &&
     /mobile carillon|in storage/i.test(pageBadge) &&
-    /mobile carillon|in storage/i.test(location.name);
+    /mobile carillon|in storage/i.test(buildingLine);
 
-  if (location.name && !hideName) {
-    parts.push(`<p class="location-name">${escapeHtml(location.name)}</p>`);
+  if (buildingLine && !hideBuilding && !location.hide_building) {
+    parts.push(`<p class="location-building">${escapeHtml(buildingLine)}</p>`);
+    if (buildingTranslation) {
+      parts.push(`<p class="location-building-translation">${escapeHtml(buildingTranslation)}</p>`);
+    }
   }
-  if (location.also_known_as?.length) {
-    parts.push(
-      `<ul class="location-aka">${location.also_known_as
-        .map((item) => `<li>${escapeHtml(item)}</li>`)
-        .join("")}</ul>`
-    );
-  }
+
+  const localityParts = [];
   if (location.address_lines?.length) {
-    parts.push(
+    localityParts.push(
       `<div class="location-address">${location.address_lines
         .map((line) => `<p>${escapeHtml(line)}</p>`)
         .join("")}</div>`
     );
   }
-  if (location.locality) {
-    parts.push(`<p class="location-locality">${escapeHtml(location.locality)}</p>`);
+  if (cityRegion) {
+    localityParts.push(`<p class="location-city-region">${escapeHtml(cityRegion)}</p>`);
   }
+  if (country) {
+    localityParts.push(`<p class="location-country">${escapeHtml(country)}</p>`);
+  }
+  if (localityParts.length) {
+    parts.push(`<div class="location-locality-block">${localityParts.join("")}</div>`);
+  }
+
   if (location.notes?.length) {
     parts.push(
       `<ul class="location-notes">${location.notes
@@ -251,7 +924,8 @@ function renderContactPanel(contact) {
 }
 
 function renderCarillonistPanel(carillonist) {
-  return renderPeoplePanel("Carillonist", carillonist);
+  const title = carillonist?.title || "Carillonist";
+  return renderPeoplePanel(title, carillonist);
 }
 
 function formatPastLifespan(lifespan) {
@@ -260,7 +934,7 @@ function formatPastLifespan(lifespan) {
   return lifespan;
 }
 
-function renderPastTimelineCard(entry) {
+function renderPastCarillonistEvent(entry) {
   const cert = entry.cert_label
     ? `<span class="contact-person-cert">(${escapeHtml(entry.cert_label)})</span>`
     : "";
@@ -271,257 +945,71 @@ function renderPastTimelineCard(entry) {
   const title = entry.person_title
     ? `<p class="contact-person-title">${escapeHtml(entry.person_title).replace(/\n/g, "<br>")}</p>`
     : "";
-  const dateLabel = entry.date_label
-    ? `<span class="past-timeline-date">${escapeHtml(entry.date_label)}</span>`
+  const yearLine = entry.date_label
+    ? `<div class="past-carillonist-event-year">${escapeHtml(entry.date_label)}</div>`
     : "";
   const name = entry.person_name
-    ? `<p class="contact-person-name">${dateLabel}${dateLabel ? " " : ""}${escapeHtml(entry.person_name)}${cert ? ` ${cert}` : ""} ${lifespan}</p>`
-    : dateLabel
-      ? `<p class="contact-person-name">${dateLabel}</p>`
-      : "";
-  const flagClass =
-    entry.flags?.some((f) => f.startsWith("placeholder")) ? " is-placeholder" : "";
-  const kindClass = entry.kind ? ` past-timeline-card--${entry.kind}` : "";
-
-  return `<div class="past-timeline-card${flagClass}${kindClass}" data-entry-id="${escapeHtml(entry.id)}" style="top:${entry.layoutTopPx ?? 0}px">
-    <div class="past-timeline-card-body">
-      ${name}
-      ${title}
-    </div>
-  </div>`;
-}
-
-const PAST_CARD_EST_HEIGHT = 48;
-const PAST_CARD_GAP = 6;
-const PAST_TIMELINE_MAX_HEIGHT = 440;
-
-function computePastTimelineHeight(yearMin, yearMax, entryCount) {
-  const yearSpan = Math.max(yearMax - yearMin, 1);
-  const byYears = yearSpan * 2.6 + 36;
-  const byEntries = entryCount * (PAST_CARD_EST_HEIGHT + PAST_CARD_GAP) + 28;
-  return Math.round(Math.min(PAST_TIMELINE_MAX_HEIGHT, Math.max(200, Math.min(byYears, byEntries))));
-}
-
-function layoutPastTimelineCards(entries, timelineHeightPx) {
-  const items = entries
-    .filter((entry) => typeof entry.axis_start_pct === "number")
-    .map((entry) => {
-      const idealTopPx = (entry.axis_start_pct / 100) * timelineHeightPx;
-      return { entry, idealTopPx };
-    })
-    .sort((a, b) => a.idealTopPx - b.idealTopPx || (a.entry.start_year ?? 0) - (b.entry.start_year ?? 0));
-
-  const placed = [];
-  let maxBottom = 0;
-
-  for (const item of items) {
-    let topPx = Math.max(0, item.idealTopPx);
-
-    for (let pass = 0; pass < items.length + 1; pass += 1) {
-      let shifted = false;
-      for (const other of placed) {
-        const overlap =
-          topPx < other.bottom + PAST_CARD_GAP &&
-          topPx + PAST_CARD_EST_HEIGHT > other.top - PAST_CARD_GAP;
-        if (overlap) {
-          topPx = other.bottom + PAST_CARD_GAP;
-          shifted = true;
-        }
-      }
-      if (!shifted) break;
-    }
-
-    item.entry.layoutTopPx = Math.round(topPx);
-    const bottom = topPx + PAST_CARD_EST_HEIGHT;
-    placed.push({ top: topPx, bottom });
-    maxBottom = Math.max(maxBottom, bottom);
-  }
-
-  return maxBottom;
-}
-
-function renderPastTimelineAxis(timeline) {
-  const { year_min: yearMin, year_max: yearMax, entries } = timeline;
-  const span = Math.max(yearMax - yearMin, 1);
-  const tickStep = span > 120 ? 20 : span > 60 ? 10 : 5;
-  const firstTick = Math.ceil(yearMin / tickStep) * tickStep;
-  const ticks = [];
-  for (let year = firstTick; year <= yearMax; year += tickStep) {
-    const pct = ((year - yearMin) / span) * 100;
-    ticks.push(`<div class="past-timeline-tick" style="top:${pct}%"><span>${year}</span></div>`);
-  }
-
-  const segments = entries
-    .filter((entry) => typeof entry.axis_start_pct === "number")
-    .map(
-      (entry) => `<div class="past-timeline-segment past-timeline-segment--${escapeHtml(entry.kind || "tenure")}" data-entry-id="${escapeHtml(entry.id)}" style="top:${entry.axis_start_pct}%; height:${Math.max((entry.axis_end_pct ?? entry.axis_start_pct) - entry.axis_start_pct, entry.kind === "dedication" ? 0.8 : 1.5)}%"></div>`
-    )
-    .join("");
-
-  return `<div class="past-timeline-axis-col">
-    <div class="past-timeline-axis-line" aria-hidden="true"></div>
-    <div class="past-timeline-ticks">${ticks.join("")}</div>
-    <div class="past-timeline-segments">${segments}</div>
-  </div>`;
-}
-
-function renderPastTimeline(timeline) {
-  const entries = timeline.entries || [];
-  let height = computePastTimelineHeight(
-    timeline.year_min,
-    timeline.year_max,
-    entries.length
-  );
-  let maxBottom = layoutPastTimelineCards(entries, height);
-  if (maxBottom + 16 > height) {
-    height = Math.ceil(maxBottom + 16);
-    maxBottom = layoutPastTimelineCards(entries, height);
-  }
-
-  const label = timeline.label
-    ? `<h3 class="past-timeline-subtitle">${escapeHtml(timeline.label)}</h3>`
+    ? `<p class="contact-person-name">${escapeHtml(entry.person_name)}${cert ? ` ${cert}` : ""} ${lifespan}</p>`
     : "";
-  const cards = entries.map((entry) => renderPastTimelineCard(entry)).join("");
+  const kindClass = entry.kind ? ` past-carillonist-event--${entry.kind}` : "";
 
-  return `<div class="past-timeline-block">
-    ${label}
-    <div class="past-timeline-wrap" style="--timeline-height:${height}px">
-      ${renderPastTimelineAxis(timeline)}
-      <div class="past-timeline-cards-col">${cards}</div>
+  return `<article class="prior-history-event past-carillonist-event${kindClass}">
+    <div class="prior-history-marker" aria-hidden="true"><span class="prior-history-dot"></span></div>
+    <div class="prior-history-content">
+      ${yearLine}
+      <div class="past-timeline-card-body">
+        ${name}
+        ${title}
+      </div>
     </div>
-  </div>`;
+  </article>`;
 }
 
-function renderPastUnknownCard(entry) {
-  return renderPastTimelineCard(entry).replace(
-    'class="past-timeline-card',
-    'class="past-timeline-card past-timeline-unknown-inline'
-  );
-}
-
-function renderPastUnknownCards(entries) {
-  return entries.map((entry) => renderPastUnknownCard(entry)).join("");
-}
-
-function bindPastTimelineHover(root) {
-  root.querySelectorAll(".past-timeline-card").forEach((card) => {
-    const id = card.dataset.entryId;
-    card.addEventListener("mouseenter", () => {
-      root.querySelectorAll(`[data-entry-id="${id}"]`).forEach((el) => el.classList.add("is-highlighted"));
-    });
-    card.addEventListener("mouseleave", () => {
-      root.querySelectorAll(`[data-entry-id="${id}"]`).forEach((el) => el.classList.remove("is-highlighted"));
-    });
+function collectPastCarillonistEntries(past) {
+  const entries = [];
+  for (const timeline of past.timelines || []) {
+    entries.push(...(timeline.entries || []));
+  }
+  entries.push(...(past.unknown_time || []));
+  return entries.sort((a, b) => {
+    const ay = a.start_year ?? a.end_year ?? a.anchor_year ?? -1;
+    const by = b.start_year ?? b.end_year ?? b.anchor_year ?? -1;
+    if (ay !== by) return ay - by;
+    return String(a.date_label || "").localeCompare(String(b.date_label || ""));
   });
-}
-
-function reflowPastTimelineCards(root) {
-  root.querySelectorAll(".past-timeline-wrap").forEach((wrap) => {
-    const cardsCol = wrap.querySelector(".past-timeline-cards-col");
-    if (!cardsCol) return;
-
-    const cards = [...cardsCol.querySelectorAll(".past-timeline-card")];
-    if (!cards.length) return;
-
-    const height = wrap.getBoundingClientRect().height;
-    const items = cards
-      .map((card) => {
-        const segment = wrap.querySelector(
-          `.past-timeline-segment[data-entry-id="${CSS.escape(card.dataset.entryId)}"]`
-        );
-        let idealTopPx = parseFloat(card.style.top) || 0;
-        if (segment) {
-          const segTop = parseFloat(segment.style.top) || 0;
-          idealTopPx = (segTop / 100) * height;
-        }
-        return { card, idealTopPx, cardHeight: card.offsetHeight || PAST_CARD_EST_HEIGHT };
-      })
-      .sort((a, b) => a.idealTopPx - b.idealTopPx);
-
-    const placed = [];
-    let maxBottom = 0;
-    for (const item of items) {
-      let topPx = Math.max(0, item.idealTopPx);
-      for (let pass = 0; pass < items.length + 1; pass += 1) {
-        let shifted = false;
-        for (const other of placed) {
-          const overlap =
-            topPx < other.bottom + PAST_CARD_GAP &&
-            topPx + item.cardHeight > other.top - PAST_CARD_GAP;
-          if (overlap) {
-            topPx = other.bottom + PAST_CARD_GAP;
-            shifted = true;
-          }
-        }
-        if (!shifted) break;
-      }
-      item.card.style.top = `${Math.round(topPx)}px`;
-      const bottom = topPx + item.cardHeight;
-      placed.push({ top: topPx, bottom });
-      maxBottom = Math.max(maxBottom, bottom);
-    }
-
-    const neededHeight = Math.ceil(maxBottom + 16);
-    if (neededHeight > height) {
-      wrap.style.setProperty("--timeline-height", `${neededHeight}px`);
-    }
-  });
-}
-
-function renderPastFlatCards(entries) {
-  if (!entries?.length) return "";
-  return `<div class="past-timeline-flat-cards">${renderPastUnknownCards(entries)}</div>`;
 }
 
 function renderPastCarillonistPanel(past) {
   if (!past?.has_content) return "";
 
-  const timelines = past.timelines || [];
-  let flatEntries = [...(past.unknown_time || [])];
-  const timelineBlocks = [];
+  const entries = collectPastCarillonistEntries(past);
+  if (!entries.length) return "";
 
-  for (const timeline of timelines) {
-    const entries = timeline.entries || [];
-    if (entries.length <= 1) {
-      flatEntries = flatEntries.concat(entries);
-    } else {
-      timelineBlocks.push(timeline);
-    }
-  }
-
-  const showOthersTitle = timelineBlocks.length > 0 && flatEntries.length > 0;
-
-  const parts = ['<section class="past-carillonists-display"><h2>Past carillonists</h2>'];
-  for (const timeline of timelineBlocks) {
-    parts.push(renderPastTimeline(timeline));
-  }
-  if (flatEntries.length) {
-    if (showOthersTitle) {
-      parts.push(`<div class="past-timeline-unknown">
-        <h3 class="past-timeline-subtitle">Others</h3>
-        ${renderPastFlatCards(flatEntries)}
-      </div>`);
-    } else {
-      parts.push(renderPastFlatCards(flatEntries));
-    }
-  }
-  parts.push("</section>");
-  return parts.join("");
+  const events = entries.map((entry) => renderPastCarillonistEvent(entry)).join("");
+  return `<section class="past-carillonists-display"><h2>${escapeHtml(
+    past.title || "Past carillonists"
+  )}</h2><div class="prior-history-timeline">${events}</div></section>`;
 }
+
+const MAP_TILE_URL = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
 
 function addMapMarker(map, coords) {
   L.circleMarker(coords, {
-    radius: 10,
-    color: "#c9a227",
-    fillColor: "#e05a5a",
+    radius: 6,
+    color: "#1d4ed8",
+    fillColor: "#2563eb",
     fillOpacity: 0.9,
-    weight: 2,
+    weight: 1.5,
   }).addTo(map);
 }
 
 function initMiniMap(coords) {
+  if (miniMap) {
+    miniMap.setView(coords, 13);
+    return;
+  }
   miniMap = L.map("miniMap", { zoomControl: true, attributionControl: false }).setView(coords, 13);
-  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+  L.tileLayer(MAP_TILE_URL, {
     subdomains: "abcd",
     maxZoom: 19,
   }).addTo(miniMap);
@@ -536,7 +1024,7 @@ function openFullscreenMap() {
 
   if (!fullMap) {
     fullMap = L.map("fullMap", { zoomControl: true, attributionControl: true }).setView(mapCoords, 14);
-    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+    L.tileLayer(MAP_TILE_URL, {
       subdomains: "abcd",
       maxZoom: 19,
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; CARTO',
@@ -567,77 +1055,95 @@ document.addEventListener("keydown", (event) => {
 });
 
 async function load() {
-  const res = await fetch(`/api/sites/${siteId}`);
-  const data = await res.json();
-  if (data.error) {
-    document.getElementById("title").textContent = "Not found";
-    return;
-  }
-
-  const site = data.site;
-  const idx = data.index || {};
-  const display = data.display || {};
-
-  const pageTitle = display.title || site.site_id;
-  const pageSubtitle = display.subtitle || "";
-
-  document.title = `${pageTitle} — TowerBells`;
-  document.getElementById("title").textContent = pageTitle;
-  document.getElementById("subtitle").textContent = pageSubtitle;
-
-  const badgeEl = document.getElementById("titleBadge");
-  const pageBadge = display.badge || null;
-  if (badgeEl) {
-    if (pageBadge) {
-      badgeEl.textContent = pageBadge;
-      badgeEl.classList.remove("hidden");
-      badgeEl.removeAttribute("aria-hidden");
-    } else {
-      badgeEl.textContent = "";
-      badgeEl.classList.add("hidden");
-      badgeEl.setAttribute("aria-hidden", "true");
+  try {
+    const res = await fetch(`/api/sites/${siteId}`);
+    const data = await res.json();
+    if (data.error) {
+      document.getElementById("title").textContent = "Not found";
+      return;
     }
-  }
 
-  document.getElementById("locationPanel").innerHTML = renderLocationPanel(display.location, pageBadge);
+    const site = data.site;
+    const idx = data.index || {};
+    const display = data.display || {};
 
-  document.getElementById("detailContent").innerHTML = [
-    section("Technical data", site.technical_data),
-    renderCarillonistPanel(display.carillonist),
-    renderPastCarillonistPanel(display.past_carillonists),
-    renderContactPanel(display.contact),
-    renderSchedulePanel(display.schedule),
-    section("Remarks", site.remarks),
-    section("Prior history", site.prior_history),
-  ].join("");
+    const pageTitle = display.title || site.site_id;
+    const pageTitleTranslation = display.title_translation || "";
+    const pageSubtitle = display.subtitle || "";
 
-  document.querySelectorAll(".past-carillonists-display").forEach((root) => {
-    reflowPastTimelineCards(root);
-    bindPastTimelineHover(root);
-  });
+    document.title = `${pageTitle} — TowerBells`;
+    document.getElementById("title").textContent = pageTitle;
 
-  const events = idx.carillon_events || [];
-  if (events.length) {
-    document.getElementById("detailContent").insertAdjacentHTML(
-      "beforeend",
-      `<section><h2>History events</h2><ul class="rank-list">${events
-        .map(
-          (event) =>
-            `<li><strong>${escapeHtml(String(event.year))}</strong> — ${escapeHtml(event.type || event.code || "")}</li>`
-        )
-        .join("")}</ul></section>`
-    );
-  }
+    const titleTranslationEl = document.getElementById("titleTranslation");
+    if (titleTranslationEl) {
+      if (pageTitleTranslation) {
+        titleTranslationEl.textContent = pageTitleTranslation;
+        titleTranslationEl.classList.remove("hidden");
+        titleTranslationEl.removeAttribute("aria-hidden");
+      } else {
+        titleTranslationEl.textContent = "";
+        titleTranslationEl.classList.add("hidden");
+        titleTranslationEl.setAttribute("aria-hidden", "true");
+      }
+    }
 
-  if (site.latitude != null && site.longitude != null) {
-    mapCoords = [site.latitude, site.longitude];
-    initMiniMap(mapCoords);
-    mapExpandBtn.disabled = false;
-  } else {
-    document.getElementById("miniMap").innerHTML =
-      '<p class="detail-empty detail-empty--map">No coordinates available for this site.</p>';
-    mapExpandBtn.disabled = true;
-    mapExpandBtn.hidden = true;
+    document.getElementById("subtitle").textContent = pageSubtitle;
+
+    const legacyLink = document.getElementById("legacyLink");
+    if (legacyLink && site.page_url) {
+      legacyLink.href = site.page_url;
+      legacyLink.classList.remove("hidden");
+      legacyLink.removeAttribute("aria-hidden");
+    } else if (legacyLink) {
+      legacyLink.classList.add("hidden");
+      legacyLink.setAttribute("aria-hidden", "true");
+    }
+
+    const badgeEl = document.getElementById("titleBadge");
+    const pageBadge = display.badge || null;
+    if (badgeEl) {
+      if (pageBadge) {
+        badgeEl.textContent = pageBadge;
+        badgeEl.classList.remove("hidden");
+        badgeEl.removeAttribute("aria-hidden");
+      } else {
+        badgeEl.textContent = "";
+        badgeEl.classList.add("hidden");
+        badgeEl.setAttribute("aria-hidden", "true");
+      }
+    }
+
+    document.getElementById("locationPanel").innerHTML = renderLocationPanel(display.location, pageBadge);
+
+    document.getElementById("detailContent").innerHTML = [
+      renderFormerLocationsPanel(display.former_locations),
+      renderCarillonistPanel(display.carillonist),
+      renderPastCarillonistPanel(display.past_carillonists),
+      renderContactPanel(display.contact),
+      renderSchedulePanel(display.schedule),
+      renderTechnicalPanel(site, display.keyboard, display.technical),
+      renderPriorHistoryPanel(display.prior_history),
+      renderRemarksPanel(display.remarks),
+      renderLinksPanel(display.links),
+    ].join("");
+
+    document.querySelectorAll(".keyboard-display").forEach(bindKeyboardTooltips);
+
+    if (site.latitude != null && site.longitude != null) {
+      mapCoords = [site.latitude, site.longitude];
+      initMiniMap(mapCoords);
+      mapExpandBtn.disabled = false;
+    } else {
+      document.getElementById("miniMap").innerHTML =
+        '<p class="detail-empty detail-empty--map">No coordinates available for this site.</p>';
+      mapExpandBtn.disabled = true;
+      mapExpandBtn.hidden = true;
+    }
+  } catch (error) {
+    console.error(error);
+    document.getElementById("title").textContent = "Could not load site";
+    document.getElementById("detailContent").innerHTML =
+      '<p class="detail-empty">This page failed to load. Try refreshing.</p>';
   }
 }
 

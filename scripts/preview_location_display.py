@@ -17,23 +17,18 @@ from scraper.location_display import (
     STORAGE_RE,
     FORMERLY_RE,
     GENERIC_TOWER_RE,
-    build_location_display,
-    parse_location_override,
 )
 from server.db import connect
 
 EXAMPLE_IDS = [
-    "NLDRDRCC",
+    "BCVICTNC",
     "ILCHICUC",
-    "VAARLING",
-    "BELGKSTB",
-    "FRDOUAIA",
-    "CAGARDEN",
-    "NJPLAINF",
-    "NLSSTTDP",
-    "BEBRGGMB",
-    "NOOSLRTH",
-    "NLKTWZSA",
+    "BEARSTPC",
+    "BEGENTBF",
+    "BEBRXLPM",
+    "ATINNSJ1A",
+    "BETLTSHH",
+    "BEANTWSM",
 ]
 
 
@@ -42,6 +37,7 @@ def classify_site(site: dict, display: dict) -> list[str]:
     text = site.get("location_text") or ""
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     loc = display.get("location") or {}
+    building = loc.get("building") or {}
 
     if not text.strip():
         tags.append("empty")
@@ -61,11 +57,13 @@ def classify_site(site: dict, display: dict) -> list[str]:
         tags.append("parenthetical")
     if not loc.get("has_content"):
         tags.append("empty_display")
-    if loc.get("name") and display.get("title"):
-        if loc["name"].lower() in display["title"].lower():
-            tags.append("name_matched_title")
+    if building.get("line") and display.get("title"):
+        if building["line"].lower() in display["title"].lower():
+            tags.append("building_matched_title")
     if site.get("location_display_override"):
         tags.append("override")
+    if loc.get("edge_case"):
+        tags.append("edge_case")
     if len(lines) <= 2 and not STORAGE_RE.search(text):
         tags.append("minimal")
     if re.search(r"Czechoslovakia|Yugoslavia|formerly part of", text, re.I):
@@ -80,14 +78,20 @@ def format_display(display: dict) -> str:
     parts: list[str] = []
     if loc.get("badge"):
         parts.append(f"badge: {loc['badge']}")
-    if loc.get("name"):
-        parts.append(f"name: {loc['name']}")
-    for aka in loc.get("also_known_as") or []:
-        parts.append(f"aka: {aka}")
+    building = loc.get("building") or {}
+    if building.get("line"):
+        parts.append(f"building: {building['line']}")
+    if building.get("translation"):
+        parts.append(f"translation: {building['translation']}")
     for line in loc.get("address_lines") or []:
         parts.append(f"addr: {line}")
-    if loc.get("locality"):
-        parts.append(f"locality: {loc['locality']}")
+    if loc.get("city_region"):
+        parts.append(f"city_region: {loc['city_region']}")
+    if loc.get("country"):
+        parts.append(f"country: {loc['country']}")
+    edge = loc.get("edge_case") or {}
+    if edge.get("summary"):
+        parts.append(f"edge: {edge['summary']}")
     for note in loc.get("notes") or []:
         parts.append(f"note: {note[:100]}{'…' if len(note) > 100 else ''}")
     if loc.get("maps_url"):
@@ -125,8 +129,8 @@ def main() -> None:
             tag
             for tag in tags
             if tag
-            not in {"has_ll_raw", "parenthetical", "name_matched_title"}
-            or tag in {"empty", "empty_display", "override", "no_coordinates", "storage", "mobile"}
+            not in {"has_ll_raw", "parenthetical", "building_matched_title"}
+            or tag in {"empty", "empty_display", "override", "no_coordinates", "storage", "mobile", "edge_case"}
         ]
         if len(interesting) > 1 or (interesting and interesting != ["has_ll_raw"]):
             for tag in interesting:

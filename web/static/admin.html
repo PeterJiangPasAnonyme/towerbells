@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Edit data — TowerBells</title>
-  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260719b" />
 </head>
 <body class="admin-page">
   <header class="admin-header">
@@ -93,7 +93,10 @@
           <label>Page title
             <input type="text" name="display_title_override" placeholder="Auto-generated from full title" />
           </label>
-          <p class="field-hint">Shown as the main heading on the detail page and in search results. Save a custom value to override; clear and save to revert to auto-cleaning from <code>full_title</code>.</p>
+          <label>Page title translation
+            <input type="text" name="display_title_translation_override" placeholder="English translation shown below the title in italics" />
+          </label>
+          <p class="field-hint">Shown as the main heading on the detail page and in search results. The translation appears on the line below the title in italics, like location building names. Save a custom value to override; clear and save to revert to auto-cleaning from <code>full_title</code>.</p>
         </fieldset>
 
         <fieldset>
@@ -110,7 +113,7 @@
           <label>Location display (JSON)
             <textarea name="location_display_override" rows="10" placeholder="Auto-filled from parsed location — edit and save to override"></textarea>
           </label>
-          <p class="field-hint">Pre-filled with the current parsed location. Save to persist your edits; clear the field and save to revert to auto-parsing. Once saved, this JSON is the only source for the Location panel — empty arrays and <code>null</code> mean “do not show”. Edit <code>address_lines</code> separately if you remove text from <code>also_known_as</code>. The <code>badge</code> key (e.g. Mobile Carillon) appears in the page header, not the Location panel. Keys: badge, name, hide_name, also_known_as, address_lines, locality, notes, hide_maps.</p>
+          <p class="field-hint">Shows the effective location as it appears on the detail page. Save stores only fields that differ from auto-parsing; clear the field and save to revert. Keys: <code>building.line</code>, <code>building.translation</code>, <code>hide_building</code>, <code>address_lines</code>, <code>city_region</code>, <code>country</code>, <code>notes</code>, <code>badge</code>, <code>hide_maps</code>.</p>
           <label>Schedule display (JSON)
             <textarea name="schedule_display_override" rows="10" placeholder="Auto-filled from parsed schedule — edit and save to override"></textarea>
           </label>
@@ -123,6 +126,10 @@
             <textarea name="carillonist_display_override" rows="10" placeholder="Auto-filled from parsed carillonist — edit and save to override"></textarea>
           </label>
           <p class="field-hint">Pre-filled with the parsed carillonist. Same entry shape as contact. Hidden automatically for unknown, none, or vacant. Clear and save to revert to auto-parsing.</p>
+          <label>Keyboard display (JSON)
+            <textarea name="keyboard_display_override" rows="12" placeholder="Auto-filled from parsed keyboard — edit and save to override"></textarea>
+          </label>
+          <p class="field-hint">Compact keyboard summary for admin editing. Keys: transposition_semitones, hands_low, hands_high, count, bass_low, bass_high, missing_notes, hide_diagram, force_prose, prose. Saved as a full override server-side; diagrams stay unchanged unless layout fields change. Clear and save to revert to auto-parsing.</p>
         </fieldset>
 
         <label class="admin-checkbox">
@@ -138,6 +145,7 @@
     </main>
   </div>
 
-  <script src="/static/admin.js"></script>
+  <script src="/static/filters.js?v=20260719b"></script>
+  <script src="/static/admin.js?v=20260719h"></script>
 </body>
 </html>
