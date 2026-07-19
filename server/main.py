@@ -10,7 +10,10 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from server.db import get_filter_facets, get_filter_options, get_location_facets, get_site, search_sites
-from server.editor import admin_search, get_editable_site, update_site_records
+from server.settings import ADMIN_ENABLED
+
+if ADMIN_ENABLED:
+    from server.editor import admin_search, get_editable_site, update_site_records
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "web" / "static"
 
@@ -25,6 +28,11 @@ def _html_page(filename: str) -> FileResponse:
     )
 
 
+@app.get("/api/config")
+def public_config() -> dict:
+    return {"admin_enabled": ADMIN_ENABLED}
+
+
 @app.get("/")
 def index() -> FileResponse:
     return _html_page("index.html")
@@ -35,41 +43,39 @@ def carillon_page(site_id: str) -> FileResponse:
     return _html_page("detail.html")
 
 
-@app.get("/admin")
-def admin_page() -> FileResponse:
-    return _html_page("admin.html")
+if ADMIN_ENABLED:
 
+    @app.get("/admin")
+    def admin_page() -> FileResponse:
+        return _html_page("admin.html")
 
-class SiteUpdatePayload(BaseModel):
-    index_fields: dict = {}
-    site_fields: dict = {}
-    apply_to_milestones: bool = False
+    class SiteUpdatePayload(BaseModel):
+        index_fields: dict = {}
+        site_fields: dict = {}
+        apply_to_milestones: bool = False
 
+    @app.get("/api/admin/search")
+    def admin_site_search(q: str = "", limit: int = Query(default=50, le=200)) -> list:
+        return admin_search(q, limit=limit)
 
-@app.get("/api/admin/search")
-def admin_site_search(q: str = "", limit: int = Query(default=50, le=200)) -> list:
-    return admin_search(q, limit=limit)
+    @app.get("/api/admin/sites/{site_id}")
+    def admin_site_detail(site_id: str) -> dict:
+        data = get_editable_site(site_id)
+        if not data:
+            raise HTTPException(status_code=404, detail="not_found")
+        return data
 
-
-@app.get("/api/admin/sites/{site_id}")
-def admin_site_detail(site_id: str) -> dict:
-    data = get_editable_site(site_id)
-    if not data:
-        raise HTTPException(status_code=404, detail="not_found")
-    return data
-
-
-@app.put("/api/admin/sites/{site_id}")
-def admin_site_update(site_id: str, payload: SiteUpdatePayload) -> dict:
-    try:
-        return update_site_records(
-            site_id,
-            index_fields=payload.index_fields,
-            site_fields=payload.site_fields,
-            apply_to_milestones=payload.apply_to_milestones,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    @app.put("/api/admin/sites/{site_id}")
+    def admin_site_update(site_id: str, payload: SiteUpdatePayload) -> dict:
+        try:
+            return update_site_records(
+                site_id,
+                index_fields=payload.index_fields,
+                site_fields=payload.site_fields,
+                apply_to_milestones=payload.apply_to_milestones,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/filters")

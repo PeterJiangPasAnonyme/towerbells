@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import sqlite3
 from collections import Counter
-from pathlib import Path
 from typing import Any
 
 from scraper.carillon_events import (
@@ -21,8 +20,7 @@ from server.range_classifications import (
     RANGE_CLASSIFICATION_LEGEND,
     sort_range_classification_facets,
 )
-
-DB_PATH = Path(__file__).resolve().parent.parent / "data" / "towerbells.db"
+from server.settings import DB_PATH
 
 
 def connect() -> sqlite3.Connection:

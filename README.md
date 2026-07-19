@@ -205,3 +205,38 @@ python3 scripts/run_web.py
 ```
 
 Open **http://127.0.0.1:8000** — map on the right, search and filters on the left. Click a pin or list item to open the carillon detail page.
+
+Admin editing stays available locally by default. Set `TOWERBELLS_ADMIN_ENABLED=0` to hide admin links and return 404 for `/admin` and `/api/admin/*`.
+
+## Deploying to Render (read-only public site)
+
+This app is one FastAPI service that serves both the UI and API. The database is SQLite and is **not** in git.
+
+### 1. Publish the database
+
+Create a [GitHub Release](https://docs.github.com/en/repositories/releasing-projects-on-github/managing-releases-in-a-repository) and upload `data/towerbells.db` as a release asset.
+
+Copy the direct asset URL, e.g.:
+
+`https://github.com/PeterJiangPasAnonyme/towerbells/releases/download/v1.0.0/towerbells.db`
+
+### 2. Create the Render service
+
+1. [render.com](https://render.com) → **New → Blueprint** (or Web Service connected to this repo)
+2. If using the included `render.yaml`, Render will pick up:
+   - build: install deps + `python scripts/download_db.py`
+   - start: `uvicorn server.main:app --host 0.0.0.0 --port $PORT`
+   - `TOWERBELLS_ADMIN_ENABLED=0` (public site, no admin)
+3. In Render **Environment**, set:
+   - `TOWERBELLS_DB_URL` = your GitHub Release asset URL
+   - `TOWERBELLS_ADMIN_ENABLED` = `0`
+
+### 3. What happens in production
+
+- The build downloads `towerbells.db` into `data/towerbells.db`.
+- `/admin` and admin API routes return **404** (code stays in the repo for local use).
+- “Edit data” links are hidden on the map and detail pages.
+- Free Render instances sleep after inactivity; the first request may take ~15–30 seconds.
+
+To update live data later, upload a new release asset and redeploy (or change `TOWERBELLS_DB_URL` to the new asset URL).
+

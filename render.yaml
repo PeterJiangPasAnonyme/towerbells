@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: towerbells
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt && python scripts/download_db.py
+    startCommand: uvicorn server.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHONPATH
+        value: .
+      - key: TOWERBELLS_ADMIN_ENABLED
+        value: "0"
+      - key: TOWERBELLS_DB_URL
+        sync: false
